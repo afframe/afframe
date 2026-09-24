@@ -6,7 +6,7 @@ What comes with this report:
 
 - **Evidence**: one file per source group, each claim with a quote and a URL. See [`finance-first-evidence/`](finance-first-evidence/).
 - **A runnable model and a worked example**: [`finance-model-prototype/`](finance-model-prototype/). It runs on PostgreSQL 18, and all 77 assertions pass.
-- **Independent review**: two critical review rounds. The first found four money defects, the second found three more in advance handling and one design gap. All are fixed, and each is now a regression check. Eight deliberate rule mutations each make the checks fail (section 8.12).
+- **Independent review**: three critical review rounds. The first found four money defects. The second found three more in advance handling and one design gap. The third reviewed the Accounting-alone design (6.8): it found the single-registration check inert, plus gaps in settlement and reverse charge. All of these are fixed and each is now a regression check, except one workflow difference listed in section 11. Twelve deliberate rule mutations (A to L) each make the checks fail (section 8.12).
 
 **Evidence labels** used throughout:
 
@@ -159,10 +159,10 @@ Unit4's primary documentation was unreachable, so its row rests on marketing and
 
 | Vendor | Who owns invoices and bank | Chart of accounts | Projects | Expenses | Inbound e-invoices | Label |
 | --- | --- | --- | --- | --- | --- | --- |
-| Oracle Fusion | Payables and Receivables own invoices; Subledger Accounting derives the journal. No GL-only edition found. | The ledger sets the chart for its subledgers. | PPM, a separate pillar | Expenses, processed through Payables | Peppol BIS 3.0 in and out; separate subsystems per channel | documented / source |
+| Oracle Fusion | Payables and Receivables own invoices; Subledger Accounting derives the journal. No GL-only edition found. | The ledger sets the chart for its subledgers. | PPM, a separate pillar | Expenses, processed through Payables (source) | Peppol BIS 3.0 in and out; separate subsystems per channel (source) | documented / source |
 | Unit4 ERPx | AP and AR modules, integrated with GL | configurable; mapping not found | Project Management module (budgets, time and expense) | not found | eConnect: Peppol, and PDF via OCR into structured XML, keeping the PDF | source |
 | Acumatica | GL, AP, AR, cash and tax sold as one Financials module; GL alone is not sold | GL owns the chart; AP and PO lines default the account from the vendor or item | Project Accounting, a separate module | Advanced Expense Management (claims, corporate cards) | ML/OCR document recognition into AP bills | documented / inferred |
-| Xero | The accounting core owns invoices, bills and bank transactions outright. Projects and Expenses link to or create those core records. | One chart in the core; tracking categories are a separate dimension; apps map to the chart when they connect. | Xero Projects, an add-on: tasks, time, budgets, no ledger records of its own | Xero Expenses, an add-on: an approved claim becomes a bill | Hubdoc and apps all create the same core records | documented |
+| Xero | The accounting core owns invoices, bills and bank transactions outright. Projects and Expenses link to or create those core records. | One chart in the core; tracking categories are a separate dimension; apps map to the chart when they connect. | Xero Projects, an add-on: tasks, time, budgets, no ledger records of its own | Xero Expenses, an add-on: an approved claim becomes a bill (not re-quoted verbatim) | Hubdoc and apps all create the same core records | documented / partly |
 | SAP Business One | Sales and Purchasing documents own A/R and A/P invoices and generate linked journal entries. One license, not separate products. | Financials owns the chart; G/L account determination maps other modules to it. | Project Management module | not found | not found; partner add-ons | inferred / third-party |
 | POHODA | The journal is fed from the invoice, bank, cash and stock agendas, all inside the accounting product. A separate internal document (interní doklad) covers postings with no primary document. | Accounting owns the chart; předkontace on each document drives posting. | Zakázky: a tagging dimension with a plan, built in | GLX, a separate product that also runs standalone | ISDOC import, including ISDOC inside PDF | documented |
 | Money S3/S4/S5 | Invoice and bank agendas plus internal documents, as in POHODA | předkontace on documents | S5 only; not found for S3/S4 | Travel module, tied to payroll | ISDOC and Money's own richer XML: two formats | documented |
@@ -176,7 +176,7 @@ Unit4's primary documentation was unreachable, so its row rests on marketing and
   - Business modules own invoices, and accounting derives the journal: Oracle and SAP Business One.
   - The two are sold together, so accounting never runs alone: Acumatica.
 
-  No examined product sells a ledger alone while leaving invoices to separately sold products. Section 6.8 combines the first two patterns, which none of them does. That makes it this report's proposal, not an observed pattern.
+  None of the examined products was found to sell a ledger alone while leaving invoices to separately sold products. For Oracle and Unit4, this rests on NOT FOUND. Section 6.8 combines the first two patterns, which none of them does. That makes it this report's proposal, not an observed pattern.
 - **Chart of accounts.** Every vendor has one chart owned by the ledger, mapped to other records by rules: account determination, předkontace, kontace, item and vendor defaults. ABRA Flexi shows the account from each document. This supports the ruling in 6.6.
 - **Projects.** Oracle, Unit4, Acumatica, Xero and Helios sell projects separately. POHODA and ABRA treat them as a tagging dimension. Xero Projects owns tasks, time and budgets but no ledger records. That matches ruling D1 with the project identity kept on the platform.
 - **Expenses.** Oracle, Xero and Acumatica put claims and cards on the finance or payables side. Money and Helios tie travel expenses to payroll. Hleb's ruling puts them on the spend side.
@@ -239,6 +239,7 @@ If Afframe only needed budget-vs-ledger reporting, conformed dimensions plus a w
 | Part | Owner | Prototype |
 | --- | --- | --- |
 | Identities, roles | Platform (project identity included) | `project`, `category`, `counterparty`, `employee` |
+| External document registry: each exchanged document once, with the product that registered it | Platform (intake layer) | `external_document` |
 | Projects: structure, budget, milestones, progress | Projects | project budget as plan version `B1`; the rest not built |
 | Agreements (contracts, framework, self-billing) | Sales (customer side), Procurement (supplier side, self-billing) | `agreement` |
 | Typed records: CRM | CRM | `opportunity`, `opportunity_outcome` |
@@ -824,6 +825,7 @@ The architecture only has to express each one as a product's stage or posting ru
 - Rejected orders and over-advances leave the remainder as a forecast refund. There is no unapplied-advance record.
 - Whether a self-billed invoice should ever need our approval is open.
 - Payroll uses one cost account and one liability account.
+- One account per management category (`unique (category_id)` on `account`). Real Czech charts map several accounts to one category, so account determination will need more facts than the category.
 
 **Not reviewed again:** the fixes from the second critical review round (advance handling), and the fixes from the review of the Accounting-alone design in 6.8 (constraint-enforced registration, settlement by Treasury, reverse charge, issued-side probe).
 
