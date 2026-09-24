@@ -1,0 +1,32 @@
+name: Deploy gate
+
+# Off switch for auto-deploy. Railway waits for every GitHub Actions workflow on a main commit
+# and skips the deploy when one fails. This workflow fails on purpose when a merged PR has the
+# `no-deploy` label or `[no deploy]` in its title or commit message. The next normal merge deploys.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  deploy-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check merged PRs for the no-deploy switch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMITS: ${{ toJSON(github.event.commits) }}
+        run: |
+          {
+            jq -r '.[] | "message:" + (.message | split("\n")[0])' <<< "$COMMITS"
+            for sha in $(jq -r '.[].id' <<< "$COMMITS"); do
+              gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}/pulls" \
+                --jq '.[] | ("title:" + .title), (.labels[] | "label:" + .name)'
+            done
+          } | bash scripts/ci/deploy-gate.sh
