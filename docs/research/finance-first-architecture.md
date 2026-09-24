@@ -5,8 +5,8 @@ Research answer to `finance-first-erp-research-brief.md`, extended with the Pepp
 What comes with this report:
 
 - **Evidence**: one file per source group, each claim with a quote and a URL. See [`finance-first-evidence/`](finance-first-evidence/).
-- **A runnable model and a worked example**: [`finance-model-prototype/`](finance-model-prototype/). It runs on PostgreSQL 18, and all 65 assertions pass.
-- **Independent review**: three critical review rounds. The first found four money defects. The second found three more in advance handling and one design gap. All of these are fixed, and each is now a regression check. A third round reviewed an earlier design for selling Accounting alone, in which Accounting kept its own copy of documents. Hleb's ruling that products add features rather than take records over replaced that design (6.8), and the problems it found went with it. Nine deliberate rule mutations (A to I) each make the checks fail (section 8.12).
+- **A runnable model and a worked example**: [`finance-model-prototype/`](finance-model-prototype/). It runs on PostgreSQL 18, and all 146 assertions pass.
+- **Independent review**: three critical review rounds. The first found four money defects. The second found three more in advance handling and one design gap. All of these are fixed, and each is now a regression check. A third round reviewed an earlier design for selling Accounting alone, in which Accounting kept its own copy of documents. Hleb's ruling that products add features rather than take records over replaced that design (6.8), and the problems it found went with it. A third, independent review (ten Opus agents, five lenses, each finding adversarially verified) found 51 confirmed issues; the money and model issues are fixed with a regression check each, and the report issues are corrected (section 11 lists what is only partly fixed). Seventeen deliberate rule mutations (A to Q) each make the checks fail (section 8.12, exact diffs in [`mutations.md`](finance-model-prototype/mutations.md)).
 
 **Evidence labels** used throughout:
 
@@ -284,19 +284,20 @@ Owners are business domains, not products. A product is a sellable set of featur
 
 | Part | Owner | Prototype |
 | --- | --- | --- |
-| Identities, roles | Platform (project identity included) | `project`, `category`, `counterparty`, `employee` |
+| Shared lists | Platform | `project`, `cost_center`, `category`, `counterparty`, `employee`; activities (činnosti) not built |
 | Agreements (contracts, framework, self-billing) | Sales domain (customer side), spend domain (supplier side, self-billing) | `agreement` (the prototype has no side column, so only self-billing rows can be attributed) |
 | Typed records: CRM | CRM | `opportunity`, `opportunity_outcome` |
 | Typed records: Sales | Sales domain | `sales_order_line`, `customer_invoice_line` |
-| Typed records: spend | Spend domain (also expense claims and card transactions: not built) | `material_request_line`, `purchase_order_line`, `order_response(_line)`, `goods_receipt_line`, `supplier_invoice_line`, `invoice_response` |
-| Typed records: Inventory | Inventory | `stock_issue_line` |
-| Typed records: People | People | `timesheet_entry`, `payroll_run`, `payroll_allocation` |
-| Typed records: Treasury | Treasury domain | `bank_transaction`, `payment_allocation` (invoice, payroll or order advance), `advance_application` |
-| Stage rules | Each domain, for its own records; always active | `position_crm`, `position_sales`, `position_procurement`, `position_inventory`, `position_people`, `position_treasury` |
-| Helpers | Spend and Treasury domains | `purchase_order_line_terms` (accepted terms), `supplier_invoice_approval` (when an invoice counts), `settlement_line` (splits with largest-remainder rounding) |
+| Typed records: spend | Spend domain (expense claims and card transactions: not built) | `material_request_line`, `purchase_order_line`, `order_response(_line)`, `goods_receipt_line`, `supplier_invoice_line`, `invoice_response`, `supplier_advance_request` (proforma) |
+| Typed records: Inventory | Inventory | `goods_receipt_line` without an order, `stock_issue_line` |
+| Typed records: People | People | `timesheet_entry`, `payroll_run`, `payroll_cost_line` (payroll cost, with or without timesheets), `payroll_allocation` (re-attribution by time) |
+| Typed records: Treasury | Treasury domain | `bank_account`, `bank_transaction`, `payment_allocation` (invoice, payroll, order or proforma advance), `bank_line_classification` (lines with no document: fees, interest, taxes, loans, own transfers), `expected_cash`, `advance_application` |
+| Typed records: Accounting | Accounting | `internal_document(_line)`: opening balance, depreciation, accruals, WIP, FX, VAT settlement |
+| Stage rules | Each domain, for its own records; always active | `position_crm`, `position_sales`, `position_procurement`, `position_inventory`, `position_people`, `position_treasury`, `position_accounting` |
+| Helpers | Spend and Treasury domains | `order_response_terms` (each response re-values from the previous terms), `purchase_order_line_terms`, `supplier_invoice_approval` (when an invoice counts), `settlement_line` (splits with largest-remainder rounding) |
 | Projection | Platform | `position_entry` (union of the domain views) |
-| Plans (every budget, forecast, scenario and cash plan) | FP&A | `plan_version`, `plan_line` |
-| Ledger, chart, tax | Accounting | `account` (chart and category mapping), `journal_entry`, `journal_line`, `post_to_ledger` |
+| Plans (every budget, forecast, scenario and cash plan) | FP&A | `plan_version`, `plan_line` (optional project, optional cost center, family P&L or cash) |
+| Ledger, chart, tax | Accounting | `account` (chart and category mapping), `journal_entry` (always from a source record), `journal_line`, `post_to_ledger` |
 
 A successor's rule reads its predecessor's price. That coupling only produces rows when both records exist. Each link table belongs to the successor's domain.
 
@@ -617,7 +618,7 @@ These come from the ERP patterns in 3.1 and from the prototype, not from Peppol:
 
 ## 8. Worked example
 
-Every number below is copied from `checks.sql` output on PostgreSQL 18.6. The run ends with `ALL ASSERTIONS PASSED` (65 assertions, including regression probes run in rolled-back transactions).
+Every number below is copied from `checks.sql` output on PostgreSQL 18.6. The run ends with `ALL ASSERTIONS PASSED` (146 assertions, including regression probes run in rolled-back transactions).
 
 ### 8.1 Stored records (project P1, fit-out for Client X; CZK)
 
@@ -768,17 +769,27 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 
 ### 8.12 The checks have teeth
 
-| Mutation of `model.sql` | Caught by |
+Exact diffs and outputs: [`mutations.md`](finance-model-prototype/mutations.md). D and F are now caught first by the independent cash check, and C is stated precisely, so their first failures differ from the earlier version of this report.
+
+| Mutation | Caught by |
 | --- | --- |
 | A: invoice relieves `incurred` at invoice value | generic invariant, off by 1,000 |
 | B: order relieves the request at order price | generic invariant, off by 10,000 |
-| C: wage forecast relieved once per payroll payment | P1 cash forecast 297,000 instead of 237,000 |
-| D: approval gate removed | P1 materials incurred −64,000 instead of 0 |
+| C: wage forecast and incurred relieved once per payroll payment | generic invariant, off by 80,000 |
+| D: approval gate removed | company cash check, off by 154,880 |
 | E: receipt ignores the accepted order price | generic invariant, off by 4,000 |
-| F: advance application keeps its forecast relief | P1 cash forecast 262,410 instead of 237,000 |
+| F: advance application keeps its forecast relief | cash per project and category, off by 25,410 |
 | G: advance spread by accepted instead of ordered value | projection fails with division by zero on a rejected order |
 | H: advance application ignores the approval gate | the probe on an unapproved invoice finds the application counted |
-| I: unique supplier document number dropped | VB1's number is accepted a second time; the constraint probe fails |
+| I: unique supplier document number dropped | VB1's number is accepted a second time |
+| J: payroll cost posted only through timesheets | payroll without timesheets leaves the entry 50,000 out of balance |
+| K: bank lines with no document ignored | settled 51,640 against a bank of 51,490 |
+| L: payment matches posted once per bank line | a late match never reaches the ledger bank account (50,000) |
+| M: invoice before receipt relieves committed twice | committed −10,000 instead of 0 |
+| N: stock-order invoices stop relieving the cash forecast (the review's double count) | cash per project and category, off by 67,760 |
+| O: reliefs take project and category from the successor | phantom forecast of 2,420 on another project |
+| P: advance application leaves settled cash on the advance | P1 pays −605 instead of −1,210 on its own line |
+| Q: only the latest supplier response re-values the order | as known on 22 April: committed 50,000 instead of 42,000 |
 | (rounding probe) | 100 paid over three lines of 100 settles to the cent |
 
 ---
@@ -878,9 +889,9 @@ The architecture only has to express each one as a domain's stage or posting rul
 - despatch advice dates
 - payee and payer roles other than buyer and seller
 - customer-side advances, VAT timing on advances, and credit-note offsets (the mechanism exists: `advance_application`)
-- initiated payments (payment orders)
+- initiated payments (payment orders); loans as records (a loan payment is a classified bank line)
 - remittance advice; retention (zádržné)
-- work in progress; closed-period corrections
+- closed-period corrections (WIP is an internal document, exercised in a probe)
 - VAT claim date; non-deductible VAT
 - EN 16931 allowances, charges and rounding
 - multi-currency (rule: relieve at the predecessor's rate, FX to `actual`)
@@ -894,21 +905,27 @@ The architecture only has to express each one as a domain's stage or posting rul
 
 **Simplifications:**
 
-- The accepted order terms reflect the latest supplier response; responses must precede fulfilment (checked). Versioned terms are not built.
+- Each supplier response re-values the order from the previous terms, so past reads stay stable; responses must still precede fulfilment (checked).
 - A cut order line must be returned to its request by a negative fulfilment. The check exists; the record doesn't.
 - Rejected orders and over-advances leave the remainder as a forecast refund. There is no unapplied-advance record.
 - Whether a self-billed invoice should ever need our approval is open.
 - Payroll uses one cost account and one liability account.
 - One account per management category (`unique (category_id)` on `account`). Real Czech charts map several accounts to one category, so account determination will need more facts than the category.
 
-**Not reviewed again:** the fixes from the second critical review round (advance handling). The domain-and-feature design in 6.8 has had no independent review.
+**Partly fixed from the independent review:**
+
+- MONEY-1: employee cost rates have no recorded date, so a rate edited later still changes past reads.
+- MONEY-8: the independent cash check works per project and category, not per cash-date bucket.
+- REDTEAM-1: an invoice registered with no link and then received counts the cost twice, and no check catches it. Linking the invoice to the receipt at registration (falsifier 2) is what prevents it.
+- ARCH-5: what the Projects product ships when sold alone is defined in section 10; the Projects screens are not built.
+- STANDARDS-1, 3, 4, 5, 10, ARCH-11, REDTEAM-8: the requirements are stated (7.5, 7.7, 6.4, section 10, section 1); the prototype does not carry them yet (advance tax documents, the Czech intake extension, the normalised registration key, timestamps and actors, tax codes, counterparty and root document in the projection).
+
+**Not reviewed again:** the fixes from the second critical review round (advance handling), and the fixes from the independent review.
 
 **Not verified:**
 
 - Czech self-billing under reverse charge.
 - The booking of disputed invoices.
-- § 28 and Act 134/2016 wording (from secondary or summarised sources).
-- ISDOC current version and maintainer.
 - Peppol line-level changeable fields.
 - A Peppol MLR primary page.
 - SAP activity price revaluation.
@@ -925,7 +942,7 @@ The architecture only has to express each one as a domain's stage or posting rul
 
 ```bash
 cd docs/research/finance-model-prototype
-docker run -d --name finmodel-demo -e POSTGRES_PASSWORD=demo -p 55432:5432 postgres:18
+docker run -d --name finmodel-demo -e POSTGRES_PASSWORD=demo -e POSTGRES_DB=demo -p 55432:5432 postgres:18
 cat model.sql accounting.sql example.sql checks.sql | PGPASSWORD=demo psql -h localhost -p 55432 -U postgres -d demo -v ON_ERROR_STOP=1 -q
 docker rm -f finmodel-demo
 ```

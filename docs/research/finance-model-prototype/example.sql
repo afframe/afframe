@@ -7,11 +7,15 @@ insert into project values
     ('P1', 'Office fit-out for Client X'),
     ('P2', 'Other project');
 
+insert into cost_center values ('ADMIN', 'Administration');
+
 insert into category values
     ('revenue', 'revenue', 'Contract revenue'),
     ('materials', 'cost', 'Materials'),
     ('subcontracting', 'cost', 'Subcontracted works'),
-    ('labour', 'cost', 'Labour');
+    ('labour', 'cost', 'Labour'),
+    ('bank_fees', 'cost', 'Bank fees'),
+    ('taxes', 'cash', 'Tax payments');
 
 insert into counterparty values
     ('CLIENT_X', 'Client X s.r.o.'),
@@ -142,25 +146,30 @@ insert into payroll_run values
 insert into payroll_line values
     ('PL-03-E1', 'PR-2026-03', 'E1', 88000),
     ('PL-04-E1', 'PR-2026-04', 'E1', 84800);
+-- Payroll's own cost lines (company level), then re-attributed by the hours worked.
+insert into payroll_cost_line values
+    ('PC-03-E1', 'PL-03-E1', 'labour', null, null, 88000),
+    ('PC-04-E1', 'PL-04-E1', 'labour', null, null, 84800);
 -- Actual rate: March 88 000 / 160 h = 550; April 84 800 / 160 h = 530.
 insert into payroll_allocation values
-    ('PA-03-1', 'PL-03-E1', 'TS1', 40, 22000),
-    ('PA-03-2', 'PL-03-E1', 'TS2', 120, 66000),
-    ('PA-04-1', 'PL-04-E1', 'TS3', 80, 42400),
-    ('PA-04-2', 'PL-04-E1', 'TS4', 80, 42400);
+    ('PA-03-1', 'PC-03-E1', 'TS1', 40, 22000),
+    ('PA-03-2', 'PC-03-E1', 'TS2', 120, 66000),
+    ('PA-04-1', 'PC-04-E1', 'TS3', 80, 42400),
+    ('PA-04-2', 'PC-04-E1', 'TS4', 80, 42400);
 
 -- Treasury: one supplier payment settles three documents, one invoice is paid in part,
 -- one customer payment settles one invoice in full and another in part,
 -- March payroll is paid in two transfers (net wages, then insurance and tax).
+insert into bank_account values ('BA1', 'Main current account');
 insert into bank_transaction values
-    ('BT-PAY-03A', '2026-04-12', -60000, 'Payroll March, net wages', '2026-04-12'),
-    ('BT-PAY-03B', '2026-04-20', -28000, 'Payroll March, insurance and tax', '2026-04-20'),
-    ('BT3', '2026-05-05', -40000, 'Supplier B, partial', '2026-05-05'),
-    ('BT-PAY-04', '2026-05-12', -84800, 'Payroll April', '2026-05-12'),
-    ('BT2', '2026-05-15', -234740, 'Supplier A', '2026-05-15'),
-    ('BT1', '2026-05-20', 550000, 'Client X', '2026-05-20'),
-    ('BT5', '2026-04-25', -25410, 'Supplier A, 50 % advance on PO5', '2026-04-25'),
-    ('BT6', '2026-05-26', -25410, 'Supplier A, VB7 balance', '2026-05-26');
+    ('BT-PAY-03A', 'BA1', '2026-04-12', -60000, 'Payroll March, net wages', '2026-04-12'),
+    ('BT-PAY-03B', 'BA1', '2026-04-20', -28000, 'Payroll March, insurance and tax', '2026-04-20'),
+    ('BT3', 'BA1', '2026-05-05', -40000, 'Supplier B, partial', '2026-05-05'),
+    ('BT-PAY-04', 'BA1', '2026-05-12', -84800, 'Payroll April', '2026-05-12'),
+    ('BT2', 'BA1', '2026-05-15', -234740, 'Supplier A', '2026-05-15'),
+    ('BT1', 'BA1', '2026-05-20', 550000, 'Client X', '2026-05-20'),
+    ('BT5', 'BA1', '2026-04-25', -25410, 'Supplier A, 50 % advance on PO5', '2026-04-25'),
+    ('BT6', 'BA1', '2026-05-26', -25410, 'Supplier A, VB7 balance', '2026-05-26');
 insert into payment_allocation (id, bank_transaction_id, customer_invoice_id, supplier_invoice_id, payroll_run_id, amount) values
     ('PAY-03A', 'BT-PAY-03A', null, null, 'PR-2026-03', 60000),
     ('PAY-03B', 'BT-PAY-03B', null, null, 'PR-2026-03', 28000),
@@ -181,7 +190,7 @@ insert into advance_application values ('AA1', 'PAY-ADV5', 'VB7', 25410, '2026-0
 insert into plan_version values
     ('B1', 'Budget 2026', 'budget', null),
     ('S1', 'Budget 2026, labour +25 %', 'scenario', 'B1');
-insert into plan_line values
+insert into plan_line (plan_version_id, project_id, category_id, period_month, amount_net) values
     ('B1', 'P1', 'revenue', '2026-03-01', 400000),
     ('B1', 'P1', 'revenue', '2026-04-01', 300000),
     ('B1', 'P1', 'revenue', '2026-05-01', 300000),
@@ -192,30 +201,34 @@ insert into plan_line values
     ('B1', 'P1', 'labour', '2026-03-01', 40000),
     ('B1', 'P1', 'labour', '2026-04-01', 40000),
     ('B1', 'P1', 'labour', '2026-05-01', 40000);
-insert into plan_line
-select 'S1', project_id, category_id, period_month,
+insert into plan_line (plan_version_id, family, project_id, cost_center_id, category_id, period_month, amount_net)
+select 'S1', family, project_id, cost_center_id, category_id, period_month,
        case category_id when 'labour' then amount_net * 1.25 else amount_net end
 from plan_line where plan_version_id = 'B1';
 
--- Accounting: chart, opening balances, then the posting run.
+-- Accounting: chart, the opening balance as an internal document, then the posting run.
 insert into account values
-    ('112', 'Material in stock', null),
-    ('221', 'Bank accounts', null),
-    ('311', 'Trade receivables', null),
-    ('321', 'Trade payables', null),
-    ('331', 'Payroll liabilities (simplified)', null),
-    ('314', 'Advances paid', null),
-    ('343', 'VAT', null),
-    ('501', 'Material consumed', 'materials'),
-    ('518', 'Services: subcontracted works', 'subcontracting'),
-    ('521', 'Personnel costs (simplified)', 'labour'),
-    ('602', 'Revenue from services', 'revenue'),
-    ('701', 'Opening balance account', null);
+    ('112', 'Material in stock', null, null),
+    ('221', 'Bank accounts', null, 'BA1'),
+    ('261', 'Cash in transit', null, null),
+    ('311', 'Trade receivables', null, null),
+    ('321', 'Trade payables', null, null),
+    ('331', 'Payroll liabilities (simplified)', null, null),
+    ('314', 'Advances paid', null, null),
+    ('342', 'Other direct taxes', 'taxes', null),
+    ('343', 'VAT', null, null),
+    ('383', 'Accrued expenses', null, null),
+    ('501', 'Material consumed', 'materials', null),
+    ('518', 'Services: subcontracted works', 'subcontracting', null),
+    ('521', 'Personnel costs (simplified)', 'labour', null),
+    ('568', 'Other financial costs', 'bank_fees', null),
+    ('602', 'Revenue from services', 'revenue', null),
+    ('701', 'Opening balance account', null, null);
 
-insert into journal_entry values ('JE-OB-2026', '2026-01-01', '2026-01-01', 'opening_balance', '2026');
-insert into journal_line (journal_entry_id, account_code, project_id, debit, credit) values
-    ('JE-OB-2026', '112', null, 110000, 0),
-    ('JE-OB-2026', '221', null, 500000, 0),
-    ('JE-OB-2026', '701', null, 0, 610000);
+insert into internal_document values ('OB-2026', '2026-01-01', '2026-01-01', 'Opening balance 2026');
+insert into internal_document_line (id, internal_document_id, account_code, debit, credit) values
+    ('OB-2026-1', 'OB-2026', '112', 110000, 0),
+    ('OB-2026-2', 'OB-2026', '221', 500000, 0),
+    ('OB-2026-3', 'OB-2026', '701', 0, 610000);
 
 call post_to_ledger();

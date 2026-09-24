@@ -1,5 +1,7 @@
--- Accounting product: posts statutory journal entries from the same typed records.
--- It never reads position_entry. Already posted sources are skipped (idempotent).
+-- Accounting domain: posts statutory journal entries from the same typed records.
+-- It never reads position_entry. Already posted sources are skipped (idempotent), so
+-- every source is a unit that never changes after posting (a document, one payment
+-- allocation, one classification). Every entry points to its source record.
 -- Account codes follow Czech chart-of-accounts groups and are illustrative only.
 set search_path = finance_model;
 
@@ -12,14 +14,14 @@ begin
     -- VAT (declared and deducted in the same entry), payable.
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
-        select 'JE-' || si.id, si.issued_on, a.counts_from, 'supplier_invoice', si.id
+        select 'supplier_invoice:' || si.id, si.issued_on, a.counts_from, 'supplier_invoice', si.id
         from supplier_invoice si
         join supplier_invoice_approval a on a.supplier_invoice_id = si.id and a.counts_from is not null
         on conflict (source_type, source_id) do nothing
         returning id, source_id
     )
     insert into journal_line (journal_entry_id, account_code, project_id, debit, credit)
-    select ne.id, case when pol.to_stock then '112' else a.code end, l.project_id, l.amount_net, 0
+    select ne.id, case when coalesce(pol.to_stock, grl.id is not null) then '112' else a.code end, l.project_id, l.amount_net, 0
     from new_entry ne
     join supplier_invoice_line l on l.supplier_invoice_id = ne.source_id
     join account a on a.category_id = l.category_id
@@ -46,7 +48,7 @@ begin
     -- Stock issues: consumption by project out of stock.
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
-        select 'JE-' || s.id, s.issued_on, s.recorded_on, 'stock_issue', s.id
+        select 'stock_issue:' || s.id, s.issued_on, s.recorded_on, 'stock_issue', s.id
         from stock_issue s
         on conflict (source_type, source_id) do nothing
         returning id, source_id
@@ -62,20 +64,21 @@ begin
     from new_entry ne
     join stock_issue_line l on l.stock_issue_id = ne.source_id;
 
-    -- Payroll runs: personnel cost split by the payroll allocation, dated at period end.
+    -- Payroll runs: the cost lines, as re-attributed by timesheets, against the payroll
+    -- liability, dated at period end. The cost lines sum to the employer cost.
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
-        select 'JE-' || r.id, (r.period_month + interval '1 month - 1 day')::date, r.posted_on, 'payroll_run', r.id
+        select 'payroll_run:' || r.id, (r.period_month + interval '1 month - 1 day')::date, r.posted_on, 'payroll_run', r.id
         from payroll_run r
         on conflict (source_type, source_id) do nothing
         returning id, source_id
     )
     insert into journal_line (journal_entry_id, account_code, project_id, debit, credit)
-    select ne.id, '521', te.project_id, pa.amount, 0
+    select ne.id, a.code, u.project_id, u.amount, 0
     from new_entry ne
     join payroll_line pl on pl.payroll_run_id = ne.source_id
-    join payroll_allocation pa on pa.payroll_line_id = pl.id
-    join timesheet_entry te on te.id = pa.timesheet_entry_id
+    join payroll_cost_unit u on u.payroll_line_id = pl.id and u.amount <> 0
+    join account a on a.category_id = u.category_id
     union all
     select ne.id, '331', null, 0, sum(pl.employer_cost)
     from new_entry ne
@@ -85,7 +88,7 @@ begin
     -- Customer invoices: receivable, revenue by project, output VAT (none under reverse charge).
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
-        select 'JE-' || ci.id, ci.issued_on, ci.recorded_on, 'customer_invoice', ci.id
+        select 'customer_invoice:' || ci.id, ci.issued_on, ci.recorded_on, 'customer_invoice', ci.id
         from customer_invoice ci
         on conflict (source_type, source_id) do nothing
         returning id, source_id
@@ -107,12 +110,14 @@ begin
     group by ne.id
     having sum(l.vat_amount) <> 0;
 
-    -- Bank transactions: settle payables, receivables and payroll liabilities, or pay advances.
+    -- Payment allocations, one entry each, so an allocation added after others on the same
+    -- bank line still posts: settle payables, receivables and payroll liabilities, or pay
+    -- advances, against the bank account's ledger account.
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
-        select 'JE-' || bt.id, bt.booked_on, bt.recorded_on, 'bank_transaction', bt.id
-        from bank_transaction bt
-        where exists (select 1 from payment_allocation pa where pa.bank_transaction_id = bt.id)
+        select 'payment_allocation:' || pa.id, bt.booked_on, bt.recorded_on, 'payment_allocation', pa.id
+        from payment_allocation pa
+        join bank_transaction bt on bt.id = pa.bank_transaction_id
         on conflict (source_type, source_id) do nothing
         returning id, source_id
     )
@@ -120,23 +125,62 @@ begin
     select ne.id,
            case when pa.supplier_invoice_id is not null then '321'
                 when pa.payroll_run_id is not null then '331'
-                when pa.purchase_order_id is not null then '314'
-                else '221' end,
+                when pa.purchase_order_id is not null or pa.supplier_advance_request_id is not null then '314'
+                else bank.code end,
            null, pa.amount, 0
     from new_entry ne
-    join payment_allocation pa on pa.bank_transaction_id = ne.source_id
+    join payment_allocation pa on pa.id = ne.source_id
+    join bank_transaction bt on bt.id = pa.bank_transaction_id
+    join account bank on bank.bank_account_id = bt.bank_account_id
     union all
     select ne.id,
-           case when pa.customer_invoice_id is not null then '311' else '221' end,
+           case when pa.customer_invoice_id is not null then '311' else bank.code end,
            null, 0, pa.amount
     from new_entry ne
-    join payment_allocation pa on pa.bank_transaction_id = ne.source_id;
+    join payment_allocation pa on pa.id = ne.source_id
+    join bank_transaction bt on bt.id = pa.bank_transaction_id
+    join account bank on bank.bank_account_id = bt.bank_account_id;
+
+    -- Classified bank lines with no document: the bank account against the category's
+    -- mapped account, or the account named by the classification.
+    with new_entry as (
+        insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
+        select 'bank_line_classification:' || c.id, bt.booked_on, bt.recorded_on, 'bank_line_classification', c.id
+        from bank_line_classification c
+        join bank_transaction bt on bt.id = c.bank_transaction_id
+        on conflict (source_type, source_id) do nothing
+        returning id, source_id
+    )
+    insert into journal_line (journal_entry_id, account_code, project_id, debit, credit)
+    select ne.id, bank.code, null, greatest(c.amount, 0), greatest(-c.amount, 0)
+    from new_entry ne
+    join bank_line_classification c on c.id = ne.source_id
+    join bank_transaction bt on bt.id = c.bank_transaction_id
+    join account bank on bank.bank_account_id = bt.bank_account_id
+    union all
+    select ne.id, coalesce(c.account_code, a.code), c.project_id, greatest(-c.amount, 0), greatest(c.amount, 0)
+    from new_entry ne
+    join bank_line_classification c on c.id = ne.source_id
+    left join account a on a.category_id = c.category_id;
+
+    -- Internal documents: their lines, as entered.
+    with new_entry as (
+        insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
+        select 'internal_document:' || d.id, d.issued_on, d.recorded_on, 'internal_document', d.id
+        from internal_document d
+        on conflict (source_type, source_id) do nothing
+        returning id, source_id
+    )
+    insert into journal_line (journal_entry_id, account_code, project_id, debit, credit)
+    select ne.id, l.account_code, l.project_id, l.debit, l.credit
+    from new_entry ne
+    join internal_document_line l on l.internal_document_id = ne.source_id;
 
     -- Advance applications: the advance paid is offset against the supplier's payable.
     -- (VAT on advances, shifted by the tax document for a received payment, is not modelled.)
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
-        select 'JE-' || aa.id, aa.applied_on, greatest(aa.recorded_on, a.counts_from), 'advance_application', aa.id
+        select 'advance_application:' || aa.id, aa.applied_on, greatest(aa.recorded_on, a.counts_from), 'advance_application', aa.id
         from advance_application aa
         join supplier_invoice_approval a on a.supplier_invoice_id = aa.supplier_invoice_id and a.counts_from is not null
         on conflict (source_type, source_id) do nothing
