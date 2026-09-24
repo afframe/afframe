@@ -293,3 +293,16 @@ docs.peppol.eu's release notes/changelog.
 - Claim 5: MLR primary-source page (docs.peppol.eu) not fetched directly — only secondary corroboration; needs a targeted follow-up.
 - Claim 8: RemittanceAdvice — absence confirmed only against the Peppol BIS profile list found via search; UBL 2.4 OASIS schema page for RemittanceAdvice not checked.
 - Claim 9: whether Peppol has adopted/timelined migration to EN 16931-1:2026 in its own CIUS was not found.
+
+---
+## Addendum (second review follow-up, 2026-09-24): superseded lines and missing entries
+Provenance: "fetched" means re-fetched with curl on 2026-09-24 for this addendum; "review" means verified live by the second independent review (`.context/reviews/2026-09-24-second-review.md`) and quoted as recorded there. Earlier lines stay as written; where they conflict, this addendum wins.
+
+**Supersedes lines 103-107 and the matching gap in the summary (self-billing agreement "NOT FOUND").** https://docs.peppol.eu/poacc/self-billing/3.0/bis-sb/ (fetched), business process P12: "Directive 2006/112/EC (Article 224) requires a specific process to be observed, involving prior agreement and a procedure where the supplier is to accept each invoice." Status: CONFIRMED (documented).
+
+**New entries:**
+- "Germany only" (fetched): the marking is in the Billing 3.0 specification, https://docs.peppol.eu/poacc/billing/3.0/bis/, not on the UNCL1001-inv code list page. 384 "Corrected invoice" and 389 "Self-billed invoice" are both marked "(Germany only)". Rule PEPPOL-EN16931-P0112 (fatal): "Invoice type code 326 or 384 are only allowed when both buyer and seller are German organizations". Documented.
+- OP-BR111-R012 (review), https://docs.peppol.eu/poacc/upgrade-3/profiles/63-invoiceresponse/: "The status of invoices shall advance in the following order. AB IP UQ CA RE AP PD". Documented.
+- Code 386 (review), https://docs.peppol.eu/poacc/billing/3.0/codelist/UNCL1001-inv/: "Prepayment invoice: An invoice to pay amounts for goods and services in advance; these amounts will be subtracted from the final invoice". Billing 3.0, https://docs.peppol.eu/poacc/billing/3.0/bis/ (fetched), section 5.6 on negative invoices: "Pre-payment (with or without VAT) is settled through a final invoice". Documented.
+- National-currency VAT (review), Billing 3.0: "the amount of VAT payable in national currency is stated in the element Invoice total VAT amount in accounting currency (BT-111) ... The exchange rate is not specified in the invoice instance, and hence this calculation is not validated." Documented.
+- Invoice number scope (review): BT-1 identifies the invoice "within the business context, time-frame, operating systems and records of the Seller" (https://docs.peppol.eu/poacc/billing/3.0/syntax/ubl-invoice/cbc-ID/); BT-26 "Shall be provided in case the Preceding Invoice identifier is not unique". BR-CO-26 requires only one of the Seller identifier (BT-29), the Seller legal registration identifier (BT-30) or the Seller VAT identifier (BT-31). Documented.

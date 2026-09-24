@@ -250,3 +250,13 @@ def get_state(self):
 - IEEE IT Professional 2003 paper (Smets-Solanes & Carvalho) full text — paywalled (IEEE Xplore/ACM DL), ResearchGate returned HTTP 403. Citation existence CONFIRMED via search; content claims from it NOT FOUND (no verbatim access).
 - Full algorithmic bodies of ERP5 Solver classes (`DeliverySolver.py` beyond docstring, `TargetSolver.py`) — not read line-by-line.
 - Whether ERP5 has a distinct "Accounting Rule" that expands Simulation Movements into ledger transactions — inferred from architecture, not directly traced in code this session (PARTLY, claim 2).
+
+---
+## Addendum (second review follow-up, 2026-09-24): Tryton's posted filter is optional
+**Supersedes the "posted" wording at line 170 (claim 7) and line 245 (extra finding 4: "compares budget only to *posted* actuals").** Tryton main, `modules/account_budget/account.py:259-262`, re-fetched with curl on 2026-09-24:
+```python
+    posted = fields.Boolean(
+        "Posted",
+        help="Only include posted moves.")
+```
+The budget compares the period's move lines, and restricting them to posted moves is an optional flag. The finding that no commitment or encumbrance stage exists still stands. Status: CONFIRMED. Label: source. The second independent review reached the same result (EVIDENCE-1).

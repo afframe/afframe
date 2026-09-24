@@ -187,3 +187,10 @@ Status: NOT FOUND (in erpnext core scope). Label: n/a.
 - Odoo clone: `/tmp/odoo` (sparse: `addons/{analytic,hr_timesheet,project,sale_project,sale_timesheet,purchase,hr_expense,stock_account,account}`).
 - ERPNext clone: `/tmp/erpnext` (sparse: `erpnext/accounts/{doctype/budget,doctype/payment_ledger_entry,doctype/payment_entry,doctype/gl_entry,doctype/purchase_invoice,doctype/accounting_dimension,general_ledger.py,utils.py}`, `erpnext/controllers/accounts_controller.py`, `erpnext/stock/doctype/purchase_receipt`, `erpnext/projects/doctype/timesheet`).
 - This report: `/home/vercel-sandbox/afframe/.context/research/odoo-erpnext.md`
+
+---
+## Addendum (second review follow-up, 2026-09-24): per-module profitability overrides
+**Supersedes line 55 (claim 3), which says purchase and expense have no override of their own and that the mechanism is "centralized in `sale_project`".** Odoo 18.0 source, re-fetched with curl on 2026-09-24:
+- `addons/project_purchase/models/project_project.py:140-141`: `def _get_profitability_items(self, with_action=True):` then `profitability_items = super()._get_profitability_items(with_action)`.
+- `addons/project_hr_expense/models/project_project.py:122-123`: `def _get_profitability_items(self, with_action=True):` then `profitability_data = super()._get_profitability_items(with_action)`.
+The overrides live in the bridge modules `project_purchase` and `project_hr_expense`, not in `purchase` or `hr_expense`, which is why the earlier sparse checkout did not find them. The profitability panel is built by per-module `_get_profitability_items` overrides chained through `super()`. Status: CONFIRMED. Label: source. The second independent review reached the same result (EVIDENCE-1).
