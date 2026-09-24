@@ -1,4 +1,4 @@
-# THROWAWAY fixture branch: proves `ci` fails when the test service fails. Never merge.
+# THROWAWAY fixture branch: proves `ci` passes when the test service passes. Never merge.
 services:
   db:
     image: postgres:18-alpine
@@ -15,4 +15,4 @@ services:
         condition: service_healthy
     environment:
       PGPASSWORD: ci
-    command: ["sh", "-c", "psql -h db -U postgres -tAc 'select 1' && exit 1"]
+    command: ["sh", "-c", "psql -h db -U postgres -tAc 'select 1' && exit 0"]
