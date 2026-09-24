@@ -28,6 +28,20 @@ create table counterparty (
     name text not null
 );
 
+-- Intake and exchange layer: each external document once, keyed by the other party
+-- and the document number (EN 16931 BT-1), with the one product that registered it.
+-- Registering records reference it through (id, direction, registered_by), so the
+-- same document cannot be registered by two products or twice by one.
+create table external_document (
+    id text primary key,
+    direction text not null check (direction in ('received', 'issued')),
+    counterparty_id text not null references counterparty,
+    document_number text not null,
+    registered_by text not null check (registered_by in ('procurement', 'sales', 'accounting')),
+    unique (direction, counterparty_id, document_number),
+    unique (id, direction, registered_by)
+);
+
 create table employee (
     id text primary key,
     name text not null
@@ -102,7 +116,12 @@ create table customer_invoice (
     counterparty_id text not null references counterparty,
     issued_on date not null,                -- taxable supply date
     due_on date not null,
-    recorded_on date not null
+    recorded_on date not null,
+    external_document_id text not null unique,
+    direction text not null default 'issued' check (direction = 'issued'),
+    registered_by text not null default 'sales' check (registered_by = 'sales'),
+    foreign key (external_document_id, direction, registered_by)
+        references external_document (id, direction, registered_by)
 );
 
 create table customer_invoice_line (
@@ -197,7 +216,11 @@ create table supplier_invoice (
     recorded_on date not null,
     requires_approval boolean not null default false,
     self_billing_agreement_id text references agreement,  -- set when we issued it on the supplier's behalf
-    document_number text                    -- the supplier's own number (EN 16931 BT-1)
+    external_document_id text not null unique,
+    direction text not null default 'received' check (direction = 'received'),
+    registered_by text not null default 'procurement' check (registered_by = 'procurement'),
+    foreign key (external_document_id, direction, registered_by)
+        references external_document (id, direction, registered_by)
 );
 
 create table supplier_invoice_line (
@@ -292,6 +315,37 @@ create table payroll_allocation (
 );
 
 -- ---------------------------------------------------------------------------
+-- Accounting: documents it captures itself (defined before Treasury, which settles them)
+-- ---------------------------------------------------------------------------
+-- A source document Accounting captures itself because no installed product owns it
+-- (e.g. Accounting sold alone). When the owning product is installed, that product
+-- registers the document and the journal entry points to it through source_type /
+-- source_id. external_document guarantees one registering record per document.
+-- Documents stay here after another product is installed; Treasury settles them
+-- (payment_allocation) and later corrections may reference them.
+create table accounting_source_document (
+    id text primary key,
+    external_document_id text not null unique,
+    direction text not null check (direction in ('received', 'issued')),
+    registered_by text not null default 'accounting' check (registered_by = 'accounting'),
+    issued_on date not null,
+    due_on date not null,
+    recorded_on date not null,
+    foreign key (external_document_id, direction, registered_by)
+        references external_document (id, direction, registered_by)
+);
+
+create table accounting_source_document_line (
+    id text primary key,
+    accounting_source_document_id text not null references accounting_source_document,
+    project_id text references project,
+    category_id text not null references category,
+    amount_net numeric(14, 2) not null,
+    vat_amount numeric(14, 2) not null,
+    self_assessed_vat numeric(14, 2) not null default 0  -- reverse charge: declared and deducted by us
+);
+
+-- ---------------------------------------------------------------------------
 -- Treasury
 -- ---------------------------------------------------------------------------
 create table bank_transaction (
@@ -309,8 +363,10 @@ create table payment_allocation (
     supplier_invoice_id text references supplier_invoice,
     payroll_run_id text references payroll_run,
     purchase_order_id text references purchase_order,  -- advance paid before any invoice
+    accounting_source_document_id text references accounting_source_document,  -- captured by Accounting
     amount numeric(14, 2) not null,         -- positive, settled amount
-    check (num_nonnulls(customer_invoice_id, supplier_invoice_id, payroll_run_id, purchase_order_id) = 1)
+    check (num_nonnulls(customer_invoice_id, supplier_invoice_id, payroll_run_id, purchase_order_id,
+                        accounting_source_document_id) = 1)
 );
 
 -- An advance offset against the final invoice: a settlement without a bank movement.
@@ -348,7 +404,7 @@ create table plan_line (
 create table account (
     code text primary key,
     name text not null,
-    category_id text references category    -- management mapping for reconciliation
+    category_id text unique references category  -- management mapping for reconciliation
 );
 
 create table journal_entry (
@@ -369,29 +425,6 @@ create table journal_line (
     credit numeric(14, 2) not null default 0
 );
 
--- A source document Accounting captures itself because no installed product owns it
--- (e.g. Accounting sold alone). When the owning product is installed, that product
--- registers the document and the journal entry points to it through source_type /
--- source_id, so each external document has exactly one registering record.
-create table accounting_source_document (
-    id text primary key,
-    kind text not null check (kind in ('received_invoice', 'issued_invoice')),
-    counterparty_id text not null references counterparty,
-    document_number text not null,          -- the issuer's number (EN 16931 BT-1)
-    issued_on date not null,
-    due_on date not null,
-    recorded_on date not null,
-    unique (kind, counterparty_id, document_number)
-);
-
-create table accounting_source_document_line (
-    id text primary key,
-    accounting_source_document_id text not null references accounting_source_document,
-    project_id text references project,
-    category_id text not null references category,
-    amount_net numeric(14, 2) not null,
-    vat_amount numeric(14, 2) not null
-);
 
 -- ---------------------------------------------------------------------------
 -- Management projection. Nobody writes to it: it is a pure function of typed
@@ -699,6 +732,10 @@ with target as (
     join payroll_line pl on pl.payroll_run_id = pa.payroll_run_id
     join payroll_allocation a on a.payroll_line_id = pl.id
     union all
+    select 'payment_allocation', pa.id, pa.amount, 'accounting_source_document_line', l.id, l.amount_net + l.vat_amount
+    from payment_allocation pa
+    join accounting_source_document_line l on l.accounting_source_document_id = pa.accounting_source_document_id
+    union all
     -- Advances are spread over the order lines by ordered value (never zero, even if
     -- the supplier later rejects the order).
     select 'payment_allocation', pa.id, pa.amount, 'purchase_order_line', pol.id,
@@ -756,6 +793,11 @@ join lateral (
     join payroll_line pl on pl.id = a.payroll_line_id
     join payroll_run pr on pr.id = pl.payroll_run_id
     where s.line_type = 'payroll_allocation' and a.id = s.line_id
+    union all
+    select l.project_id, l.category_id, d.due_on, case d.direction when 'issued' then 1 else -1 end
+    from accounting_source_document_line l
+    join accounting_source_document d on d.id = l.accounting_source_document_id
+    where s.line_type = 'accounting_source_document_line' and l.id = s.line_id
 ) x on true
 cross join lateral (values ('open', -1), ('settled', 1)) v(stage, sign)
 
@@ -800,9 +842,9 @@ join purchase_order_line pol on pol.id = s.line_id
 join purchase_order po on po.id = pol.purchase_order_id;
 
 -- Accounting: source documents it captured itself. Actual on the document date,
--- open cash until paid (settling them is described, not built).
+-- open cash until Treasury settles it.
 create view position_accounting as
-select case d.kind when 'issued_invoice' then 'revenue' else 'cost' end as family, 'actual' as stage,
+select case d.direction when 'issued' then 'revenue' else 'cost' end as family, 'actual' as stage,
        l.project_id, l.category_id, l.amount_net as amount, 1.00 as probability,
        d.issued_on as effective_on, d.recorded_on, null::date as cash_on,
        'accounting_source_document_line' as source_type, l.id as source_id
@@ -811,7 +853,7 @@ join accounting_source_document d on d.id = l.accounting_source_document_id
 
 union all
 select 'cash', 'open', l.project_id, l.category_id,
-       case d.kind when 'issued_invoice' then 1 else -1 end * (l.amount_net + l.vat_amount), 1.00,
+       case d.direction when 'issued' then 1 else -1 end * (l.amount_net + l.vat_amount), 1.00,
        d.issued_on, d.recorded_on, d.due_on,
        'accounting_source_document_line', l.id
 from accounting_source_document_line l

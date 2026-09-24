@@ -19,6 +19,20 @@ insert into counterparty values
     ('SUPPLIER_B', 'Supplier B s.r.o.'),
     ('SUPPLIER_C', 'Subcontractor C s.r.o.');
 
+-- Every exchanged document once, with the product that registered it.
+insert into external_document values
+    ('XD-CI1', 'issued', 'CLIENT_X', 'FV-2026-0001', 'sales'),
+    ('XD-CI2', 'issued', 'CLIENT_X', 'FV-2026-0002', 'sales'),
+    ('XD-CI3', 'issued', 'CLIENT_X', 'FV-2026-0003', 'sales'),
+    ('XD-VB1', 'received', 'SUPPLIER_A', 'A-26-0331', 'procurement'),
+    ('XD-VB3', 'received', 'SUPPLIER_B', 'B-2026-044', 'procurement'),
+    ('XD-VB2', 'received', 'SUPPLIER_A', 'A-26-0415', 'procurement'),
+    ('XD-VB2C', 'received', 'SUPPLIER_A', 'A-26-0428-D', 'procurement'),
+    ('XD-VB4', 'received', 'SUPPLIER_C', 'C-2026-12', 'procurement'),
+    ('XD-VB5', 'received', 'SUPPLIER_B', 'SB-2026-001', 'procurement'),
+    ('XD-VB6', 'received', 'SUPPLIER_A', 'A-26-0525', 'procurement'),
+    ('XD-VB7', 'received', 'SUPPLIER_A', 'A-26-0512', 'procurement');
+
 -- Self-billing arrangement: we issue Supplier B's invoices for stock deliveries we receive.
 insert into agreement values ('AG-B', 'SUPPLIER_B', 'self_billing', '2026-05-01', null);
 
@@ -39,9 +53,9 @@ insert into sales_order_line values
     ('SO1-M3', 'SO1', 'revenue', 'Milestone 3', 1, 300000, 0, '2026-05-31');
 -- CI3 bills extra works agreed on site without an order line.
 insert into customer_invoice values
-    ('CI1', 'CLIENT_X', '2026-03-31', '2026-04-14', '2026-03-31'),
-    ('CI2', 'CLIENT_X', '2026-04-30', '2026-05-14', '2026-04-30'),
-    ('CI3', 'CLIENT_X', '2026-05-25', '2026-06-08', '2026-05-25');
+    ('CI1', 'CLIENT_X', '2026-03-31', '2026-04-14', '2026-03-31', 'XD-CI1'),
+    ('CI2', 'CLIENT_X', '2026-04-30', '2026-05-14', '2026-04-30', 'XD-CI2'),
+    ('CI3', 'CLIENT_X', '2026-05-25', '2026-06-08', '2026-05-25', 'XD-CI3');
 insert into customer_invoice_line values
     ('CI1-1', 'CI1', 'SO1-M1', 'P1', 'revenue', 1, 400000, 0),
     ('CI2-1', 'CI2', 'SO1-M2', 'P1', 'revenue', 1, 300000, 0),
@@ -99,16 +113,17 @@ insert into goods_receipt_line values
 -- VB2C is a corrective tax document: the supplier raised the price by 1 000 per frame.
 -- VB4 bills 60 % of the subcontract without VAT (section 92e); we self-assess 21 %.
 -- VB3 needs approval: queried on 6 April (price above order), accepted on 12 April.
--- VB6 duplicates VB2 and is rejected: it never counts. VB5 is self-billed by us.
+-- VB6 bills VB2's delivery again under a new number and is rejected: it never counts.
+-- VB5 is self-billed by us.
 insert into supplier_invoice values
-    ('VB1', 'SUPPLIER_A', '2026-03-31', '2026-04-30', '2026-04-03', false, null),
-    ('VB3', 'SUPPLIER_B', '2026-04-05', '2026-05-05', '2026-04-05', true, null),
-    ('VB2', 'SUPPLIER_A', '2026-04-15', '2026-05-15', '2026-04-15', false, null),
-    ('VB2C', 'SUPPLIER_A', '2026-04-28', '2026-05-15', '2026-04-28', false, null),
-    ('VB4', 'SUPPLIER_C', '2026-04-30', '2026-05-30', '2026-05-04', false, null),
-    ('VB5', 'SUPPLIER_B', '2026-05-22', '2026-06-21', '2026-05-22', false, 'AG-B'),
-    ('VB6', 'SUPPLIER_A', '2026-05-25', '2026-06-24', '2026-05-26', true, null),
-    ('VB7', 'SUPPLIER_A', '2026-05-12', '2026-05-26', '2026-05-12', false, null);
+    ('VB1', 'SUPPLIER_A', '2026-03-31', '2026-04-30', '2026-04-03', false, null, 'XD-VB1'),
+    ('VB3', 'SUPPLIER_B', '2026-04-05', '2026-05-05', '2026-04-05', true, null, 'XD-VB3'),
+    ('VB2', 'SUPPLIER_A', '2026-04-15', '2026-05-15', '2026-04-15', false, null, 'XD-VB2'),
+    ('VB2C', 'SUPPLIER_A', '2026-04-28', '2026-05-15', '2026-04-28', false, null, 'XD-VB2C'),
+    ('VB4', 'SUPPLIER_C', '2026-04-30', '2026-05-30', '2026-05-04', false, null, 'XD-VB4'),
+    ('VB5', 'SUPPLIER_B', '2026-05-22', '2026-06-21', '2026-05-22', false, 'AG-B', 'XD-VB5'),
+    ('VB6', 'SUPPLIER_A', '2026-05-25', '2026-06-24', '2026-05-26', true, null, 'XD-VB6'),
+    ('VB7', 'SUPPLIER_A', '2026-05-12', '2026-05-26', '2026-05-12', false, null, 'XD-VB7');
 insert into supplier_invoice_line values
     ('VB1-1', 'VB1', 'GR1-1', null, null, 'P1', 'materials', 4, 128000, 26880, 0),
     ('VB3-1', 'VB3', 'GR3-1', null, null, 'P1', 'materials', 2, 59000, 12390, 0),

@@ -5,7 +5,7 @@ Research answer to `finance-first-erp-research-brief.md`, extended with the Pepp
 What comes with this report:
 
 - **Evidence**: one file per source group, each claim with a quote and a URL. See [`finance-first-evidence/`](finance-first-evidence/).
-- **A runnable model and a worked example**: [`finance-model-prototype/`](finance-model-prototype/). It runs on PostgreSQL 18, and all 72 assertions pass.
+- **A runnable model and a worked example**: [`finance-model-prototype/`](finance-model-prototype/). It runs on PostgreSQL 18, and all 77 assertions pass.
 - **Independent review**: two critical review rounds. The first found four money defects, the second found three more in advance handling and one design gap. All are fixed, and each is now a regression check. Eight deliberate rule mutations each make the checks fail (section 8.12).
 
 **Evidence labels** used throughout:
@@ -361,7 +361,7 @@ The correction kinds follow the Peppol paper's taxonomy.
   - This concrete form is this report's proposal.
   - **Built:** the category mapping in `account` and the trace from a journal entry back to its source.
   - **Not built:** one determination function shared by posting and by record views. `post_to_ledger` still hardcodes 112, 311, 314, 321, 331 and 343.
-- **Actual-source rule.** Each actual amount has one source record. Documents held in Afframe feed `actual`. Imported external ledger lines feed `actual` only when no Afframe document carries the same source reference (supplier VAT ID + document number).
+- **Actual-source rule.** Each actual amount has one source record. Documents held in Afframe feed `actual`. Imported external ledger lines feed `actual` only when no Afframe document carries the same source reference: the other party's identity (its VAT ID in practice) plus the document number.
 
 ### 6.7 VAT and Czech rules
 
@@ -383,7 +383,7 @@ The correction kinds follow the Peppol paper's taxonomy.
 
 **When Accounting is sold alone (this report's proposal).**
 
-Each domain owns its own records. Accounting owns accounting, the spend side owns spend documents and Sales owns sales documents. Accounting never takes over another product's document. Czech law allows this split: Act 563/1991 § 11(1) lets the facts of one accounting document sit in several records, provided an identifier links them ([zakonyprolidi.cz](https://www.zakonyprolidi.cz/cs/1991-563), official).
+Each domain owns its own records. Accounting owns accounting, the spend side owns spend documents and Sales owns sales documents. Accounting never takes over another product's document. Czech law allows this split. Act 563/1991 § 11(1) lets the facts of one accounting document sit in several accounting records, and "in these cases the accounting record and the accounting document must contain an identifier by which their link can be unambiguously determined" ([zakonyprolidi.cz](https://www.zakonyprolidi.cz/cs/1991-563), official, version in force in 2026). A new Accounting Act is planned (6.4), so the citation must be rechecked against it.
 
 - **Owning product installed.** It registers the document (supplier invoice, customer invoice, bank transaction). Accounting's journal entry points to it.
   - Oracle works this way: Payables and Receivables own invoices, and Subledger Accounting derives the journal.
@@ -392,14 +392,18 @@ Each domain owns its own records. Accounting owns accounting, the spend side own
   - It adds `actual` and `open` to the projection through its own view, like any other product.
   - The Czech tools keep invoice and bank agendas inside the accounting product. They add a separate internal document (interní doklad) for postings that have no primary document (3.3).
   - Xero goes further: its accounting core owns every invoice and bank record, and add-ons create them through it. The proposal here differs because it keeps Hleb's rule that each domain owns its own records once its product is installed.
-- **One source per amount.** An external document is registered once, by its owning product or by Accounting, never both. The key is counterparty plus document number (EN 16931 BT-1).
-- **Adding a product later** changes who registers new documents from that date. Documents Accounting already captured stay where they are, and nothing is re-homed.
+- **One source per amount.** The intake layer keeps every external document once (`external_document`), keyed by the other party plus the document number (EN 16931 BT-1), and records which product registered it. Every registering record must reference that entry together with its own product name, so a document registered by Procurement cannot also be captured by Accounting. This is enforced by constraints, not by a report.
+- **Adding a product later** changes who registers new documents from that date. Documents Accounting already captured stay where they are, and nothing is re-homed. Other products therefore link to them where they need to:
+  - Treasury settles them (`payment_allocation` may target an Accounting-captured document). Built.
+  - A later credit note registered by Procurement may reference a captured document as the one it corrects. Described, not built.
+- **Approval.** Accounting counts a captured document from registration, while Procurement counts its invoices from approval. The same disputed invoice therefore enters `actual` at different moments depending on who registered it. That is a workflow difference, listed in 11.
 - **Contracts** stay with Sales and Procurement. Accounting does not need them to post, except for the self-billing authorisation, which is Procurement's agreement.
 - **Bank statements** follow the same rule: Treasury registers them when installed, otherwise Accounting captures them. Described, not built.
-- **Built and checked** (probe in `checks.sql`):
-  - A received invoice captured by Accounting counts once in the projection and keeps both generic invariants.
-  - It posts and reconciles to the ledger.
-  - A second registration of the same supplier document by Procurement is detected.
+- **Built and checked** (probes in `checks.sql`):
+  - A received invoice, an issued invoice and a reverse-charge invoice (§ 92e, self-assessed VAT) captured by Accounting each count once in the projection.
+  - They keep both generic invariants, post, and reconcile to the ledger.
+  - Treasury settles the received invoice later, and both the projection and the payable clear.
+  - Accounting capturing a document Procurement already registered is refused by a constraint. So is registering the same party's document number twice.
 
 ### 6.9 Physical options
 
@@ -524,7 +528,7 @@ EN 16931-1 was revised in May 2026, and the 2017 version stays compliant during 
 - **Mixed input.** One intake layer handles every inbound source: Peppol (UBL, CII), ISDOC, other national XML, e-mailed PDF and scans.
   - Each format maps to EN 16931 semantics (the BT business terms) at the boundary. From there it maps to the typed record of the owning product, or to an Accounting source document when that product is not installed.
   - EN 16931 is the boundary vocabulary, not the internal schema (line 4824).
-  - The original file is kept as evidence.
+  - The original file is kept as evidence. Each document is registered once (6.8).
   - Fields extracted from PDF or scans are inferred until a person or a rule confirms them. That needs the suggestion store listed as not built in 7.9.
   - Outbound runs the other way: typed record → EN 16931 semantics → Peppol or ISDOC.
 - **Rule.** Inbound and outbound documents map to and from typed records at the boundary. An inbound invoice creates a supplier invoice that still needs our acceptance (external validity ≠ internal approval). A Message Level Response (technical receipt) is not an Invoice Response (business decision).
@@ -554,7 +558,7 @@ These come from the ERP patterns in 3.1 and from the prototype, not from Peppol:
 
 ## 8. Worked example
 
-Every number below is copied from `checks.sql` output on PostgreSQL 18.6. The run ends with `ALL ASSERTIONS PASSED` (72 assertions, including regression probes run in rolled-back transactions).
+Every number below is copied from `checks.sql` output on PostgreSQL 18.6. The run ends with `ALL ASSERTIONS PASSED` (77 assertions, including regression probes run in rolled-back transactions).
 
 ### 8.1 Stored records (project P1, fit-out for Client X; CZK)
 
@@ -715,8 +719,10 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 | F: advance application keeps its forecast relief | P1 cash forecast 262,410 instead of 237,000 |
 | G: advance spread by accepted instead of ordered value | projection fails with division by zero on a rejected order |
 | H: advance application ignores the approval gate | the probe on an unapproved invoice finds the application counted |
-| I: Accounting's view left out of the projection | the Accounting-alone probe finds no cost actual instead of 10,000 |
+| I: Accounting's view left out of the projection | the Accounting-alone probe finds no cost actual instead of 30,000 |
 | J: an Accounting-captured invoice books VAT into cost | the Accounting-alone probe finds a reconciliation difference of 2,100 |
+| K: the registration key ignores which product registered the document | Accounting captures VB1 a second time; the constraint probe fails |
+| L: settling a captured payable uses the receivable sign | open cash 76,800 instead of 101,000 |
 | (rounding probe) | 100 paid over three lines of 100 settles to the cent |
 
 ---
@@ -730,7 +736,7 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 5. **Controllers need frequent manual adjustments**, and the adjustment record grows into a general journal.
 6. **Buyers never combine products.**
 7. **An e-invoice exchange requirement** (ISDOC, Peppol, ViDA) cannot map onto typed records without losing a document-level meaning the ledger needs.
-8. **Customers need to re-home documents** that Accounting captured onto Sales or Procurement records after adding those products. Or Accounting-alone customers need most of Procurement's features (approval, matching) on captured documents, so the two registration paths become duplicates.
+8. **Customers need to re-home documents** that Accounting captured onto Sales or Procurement records after adding those products. Signs of this: every settlement, correction and matching feature needs a second target type for captured documents, or Accounting-alone customers need most of Procurement's features (approval, matching) on captured documents, so the two registration paths become duplicates.
 9. **Project budgets and company versions can't be kept apart**, because companies keep editing the same budget in both Projects and FP&A.
 
 ---
@@ -744,7 +750,7 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
    - link conventions, the stage contract and projection engine, the plan-line contract
    - the chart of accounts and account determination: Accounting-owned reference data, shipped with every product, read-only outside Accounting
    - validation profiles (EN 16931 rules, versioned), audit
-   - the intake and exchange layer: mixed input mapped to EN 16931 semantics; ISDOC and Peppol out
+   - the intake and exchange layer: mixed input mapped to EN 16931 semantics; each external document registered once, by one product; ISDOC and Peppol out
 2. **Products** (each sellable, each owning its records and contributing its stage rules):
    - **CRM**: opportunities, quotations.
    - **Sales**: orders, customer contracts, customer invoices.
@@ -807,7 +813,7 @@ The architecture only has to express each one as a product's stage or posting ru
 - stored-projection equality test; a suggestion store for inferred matches
 - Projects records: structure, milestones, progress, acceptance
 - expense claims and card transactions on the spend side
-- Accounting capturing bank statements, and settling the documents it captured
+- Accounting capturing bank statements; a Procurement credit note referencing an Accounting-captured document
 - account determination as one function shared by posting and by record views
 - the intake layer: format mappings, OCR, keeping the originals
 
@@ -819,7 +825,9 @@ The architecture only has to express each one as a product's stage or posting ru
 - Whether a self-billed invoice should ever need our approval is open.
 - Payroll uses one cost account and one liability account.
 
-**Not reviewed again:** the fixes from the second critical review round (advance handling), and the Accounting-alone design in 6.8.
+**Not reviewed again:** the fixes from the second critical review round (advance handling), and the fixes from the review of the Accounting-alone design in 6.8 (constraint-enforced registration, settlement by Treasury, reverse charge, issued-side probe).
+
+**Workflow differences left as they are:** Accounting-captured documents count from registration, and Procurement invoices count from approval (6.8).
 
 **Not verified:**
 

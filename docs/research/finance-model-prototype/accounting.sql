@@ -118,19 +118,21 @@ begin
     )
     insert into journal_line (journal_entry_id, account_code, project_id, debit, credit)
     select ne.id,
-           case when pa.supplier_invoice_id is not null then '321'
+           case when pa.supplier_invoice_id is not null or d.direction = 'received' then '321'
                 when pa.payroll_run_id is not null then '331'
                 when pa.purchase_order_id is not null then '314'
                 else '221' end,
            null, pa.amount, 0
     from new_entry ne
     join payment_allocation pa on pa.bank_transaction_id = ne.source_id
+    left join accounting_source_document d on d.id = pa.accounting_source_document_id
     union all
     select ne.id,
-           case when pa.customer_invoice_id is not null then '311' else '221' end,
+           case when pa.customer_invoice_id is not null or d.direction = 'issued' then '311' else '221' end,
            null, 0, pa.amount
     from new_entry ne
-    join payment_allocation pa on pa.bank_transaction_id = ne.source_id;
+    join payment_allocation pa on pa.bank_transaction_id = ne.source_id
+    left join accounting_source_document d on d.id = pa.accounting_source_document_id;
 
     -- Advance applications: the advance paid is offset against the supplier's payable.
     -- (VAT on advances, shifted by the tax document for a received payment, is not modelled.)
@@ -149,7 +151,7 @@ begin
     cross join lateral (values ('321', aa.amount, 0.00), ('314', 0.00, aa.amount)) v(account_code, debit, credit);
 
     -- Source documents Accounting captured itself: received invoices as payables,
-    -- issued invoices as receivables.
+    -- issued invoices as receivables, reverse-charge VAT self-assessed as for suppliers.
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
         select 'JE-' || d.id, d.issued_on, d.recorded_on, 'accounting_source_document', d.id
@@ -159,28 +161,34 @@ begin
     )
     insert into journal_line (journal_entry_id, account_code, project_id, debit, credit)
     select ne.id, a.code, l.project_id,
-           case d.kind when 'received_invoice' then l.amount_net else 0 end,
-           case d.kind when 'issued_invoice' then l.amount_net else 0 end
+           case d.direction when 'received' then l.amount_net else 0 end,
+           case d.direction when 'issued' then l.amount_net else 0 end
     from new_entry ne
     join accounting_source_document d on d.id = ne.source_id
     join accounting_source_document_line l on l.accounting_source_document_id = d.id
     join account a on a.category_id = l.category_id
     union all
     select ne.id, '343', null,
-           case d.kind when 'received_invoice' then sum(l.vat_amount) else 0 end,
-           case d.kind when 'issued_invoice' then sum(l.vat_amount) else 0 end
+           case d.direction when 'received' then sum(l.vat_amount) else 0 end,
+           case d.direction when 'issued' then sum(l.vat_amount) else 0 end
     from new_entry ne
     join accounting_source_document d on d.id = ne.source_id
     join accounting_source_document_line l on l.accounting_source_document_id = d.id
-    group by ne.id, d.kind
+    group by ne.id, d.direction
     having sum(l.vat_amount) <> 0
     union all
-    select ne.id, case d.kind when 'received_invoice' then '321' else '311' end, null,
-           case d.kind when 'issued_invoice' then sum(l.amount_net + l.vat_amount) else 0 end,
-           case d.kind when 'received_invoice' then sum(l.amount_net + l.vat_amount) else 0 end
+    select ne.id, '343', null, v.debit, v.credit
+    from new_entry ne
+    join accounting_source_document_line l on l.accounting_source_document_id = ne.source_id
+    cross join lateral (values (l.self_assessed_vat, 0.00), (0.00, l.self_assessed_vat)) v(debit, credit)
+    where l.self_assessed_vat <> 0
+    union all
+    select ne.id, case d.direction when 'received' then '321' else '311' end, null,
+           case d.direction when 'issued' then sum(l.amount_net + l.vat_amount) else 0 end,
+           case d.direction when 'received' then sum(l.amount_net + l.vat_amount) else 0 end
     from new_entry ne
     join accounting_source_document d on d.id = ne.source_id
     join accounting_source_document_line l on l.accounting_source_document_id = d.id
-    group by ne.id, d.kind;
+    group by ne.id, d.direction;
 end
 $$;

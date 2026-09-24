@@ -209,7 +209,7 @@ select 'revenue', 'actual', l.project_id, sum(l.amount_net)
 from customer_invoice_line l
 group by 3
 union all
-select case d.kind when 'issued_invoice' then 'revenue' else 'cost' end, 'actual', l.project_id, sum(l.amount_net)
+select case d.direction when 'issued' then 'revenue' else 'cost' end, 'actual', l.project_id, sum(l.amount_net)
 from accounting_source_document_line l
 join accounting_source_document d on d.id = l.accounting_source_document_id
 group by 1, 3;
@@ -240,22 +240,15 @@ select (select sum(amount) from position_entry where family = 'cash' and stage =
     + (select coalesce(sum(amount), 0) from payment_allocation where supplier_invoice_id is not null or payroll_run_id is not null)
     + (select coalesce(sum(aa.amount), 0) from advance_application aa
        join supplier_invoice_approval a on a.supplier_invoice_id = aa.supplier_invoice_id and a.counts_from is not null)
-    + (select coalesce(sum(case d.kind when 'issued_invoice' then 1 else -1 end * (l.amount_net + l.vat_amount)), 0)
+    + (select coalesce(sum(case d.direction when 'issued' then 1 else -1 end * (l.amount_net + l.vat_amount)), 0)
        from accounting_source_document_line l
-       join accounting_source_document d on d.id = l.accounting_source_document_id) as typed_records;
+       join accounting_source_document d on d.id = l.accounting_source_document_id)
+    - (select coalesce(sum(case d.direction when 'issued' then pa.amount else -pa.amount end), 0)
+       from payment_allocation pa
+       join accounting_source_document d on d.id = pa.accounting_source_document_id) as typed_records;
 
 select assert_equal('cash open equals unpaid counting documents and payroll', projection, typed_records)
 from cash_open_state;
-
--- One source per actual amount: an external document is registered by exactly one
--- product, either the owning product or Accounting when that product is not installed.
-create temporary view duplicate_registration as
-select d.id
-from accounting_source_document d
-join supplier_invoice si on si.counterparty_id = d.counterparty_id and si.document_number = d.document_number
-where d.kind = 'received_invoice';
-
-select assert_equal('each supplier document is registered once', count(*), 0) from duplicate_registration;
 
 -- Worked-example figures (copied into the report).
 select assert_equal('P1 materials expected (1 open frame at the 30 000 estimate)', expected, 30000),
@@ -457,7 +450,8 @@ from position_entry where family = 'cash' and stage = 'forecast'
 rollback;
 
 begin;
-insert into supplier_invoice values ('VX1', 'SUPPLIER_C', '2026-05-20', '2026-06-19', '2026-05-20', false, null);
+insert into external_document values ('XD-VX1', 'received', 'SUPPLIER_C', 'C-2026-X1', 'procurement');
+insert into supplier_invoice values ('VX1', 'SUPPLIER_C', '2026-05-20', '2026-06-19', '2026-05-20', false, null, 'XD-VX1');
 insert into supplier_invoice_line (id, supplier_invoice_id, project_id, category_id, quantity, amount_net, vat_amount)
 values ('VX1-1', 'VX1', 'P1', 'subcontracting', 0, 10000, 0);
 insert into bank_transaction values ('BX2', '2026-05-05', -1000, 'advance on PO3', '2026-05-05');
@@ -478,7 +472,8 @@ rollback;
 
 -- Regression: a payment spread over lines never loses cents.
 begin;
-insert into supplier_invoice values ('R1', 'SUPPLIER_A', '2026-05-01', '2026-05-31', '2026-05-01');
+insert into external_document values ('XD-R1', 'received', 'SUPPLIER_A', 'A-26-R1', 'procurement');
+insert into supplier_invoice values ('R1', 'SUPPLIER_A', '2026-05-01', '2026-05-31', '2026-05-01', false, null, 'XD-R1');
 insert into supplier_invoice_line (id, supplier_invoice_id, project_id, category_id, quantity, amount_net, vat_amount) values
     ('R1-1', 'R1', 'P1', 'materials', 0, 100, 0),
     ('R1-2', 'R1', 'P1', 'materials', 0, 100, 0),
@@ -489,17 +484,35 @@ select assert_equal('rounding: settled equals the payment', sum(amount), -100)
 from position_entry where source_id like 'RPA1:%' and stage = 'settled';
 rollback;
 
--- Accounting sold alone: a document Accounting captures itself counts once, keeps the
--- generic invariants and the reconciliation, and cannot also be registered by Procurement.
+-- Accounting sold alone: documents Accounting captures itself count once, keep the
+-- generic invariants and the reconciliation, can be settled by Treasury later, and
+-- cannot be registered a second time by any product.
 begin;
-insert into accounting_source_document values
-    ('AD1', 'received_invoice', 'SUPPLIER_A', 'FA-2026-0077', '2026-05-15', '2026-06-14', '2026-05-16');
-insert into accounting_source_document_line values ('AD1-1', 'AD1', null, 'materials', 10000, 2100);
+insert into external_document values
+    ('XD-AD1', 'received', 'SUPPLIER_A', 'A-26-0515', 'accounting'),
+    ('XD-AD2', 'issued', 'CLIENT_X', 'FV-2026-0004', 'accounting'),
+    ('XD-AD3', 'received', 'SUPPLIER_C', 'C-2026-15', 'accounting');
+insert into accounting_source_document (id, external_document_id, direction, issued_on, due_on, recorded_on) values
+    ('AD1', 'XD-AD1', 'received', '2026-05-15', '2026-06-14', '2026-05-16'),
+    ('AD2', 'XD-AD2', 'issued', '2026-05-20', '2026-06-03', '2026-05-20'),
+    ('AD3', 'XD-AD3', 'received', '2026-05-18', '2026-06-17', '2026-05-19');
+insert into accounting_source_document_line values
+    ('AD1-1', 'AD1', null, 'materials', 10000, 2100, 0),
+    ('AD2-1', 'AD2', null, 'revenue', 100000, 21000, 0),
+    ('AD3-1', 'AD3', null, 'subcontracting', 20000, 0, 4200);   -- reverse charge (section 92e)
+insert into bank_transaction values ('BAD1', '2026-05-28', -12100, 'payment of A-26-0515', '2026-05-28');
+insert into payment_allocation (id, bank_transaction_id, accounting_source_document_id, amount) values
+    ('PAD1', 'BAD1', 'AD1', 12100);
 call post_to_ledger();
-select assert_equal('accounting source document: cost actual', sum(amount), 10000)
+select assert_equal('accounting source document: cost actual', sum(amount), 30000)
 from position_entry where source_type = 'accounting_source_document_line' and family = 'cost' and stage = 'actual';
-select assert_equal('accounting source document: open cash', sum(amount), -12100)
-from position_entry where source_type = 'accounting_source_document_line' and family = 'cash' and stage = 'open';
+select assert_equal('accounting source document: revenue actual', sum(amount), 100000)
+from position_entry where source_type = 'accounting_source_document_line' and family = 'revenue' and stage = 'actual';
+select assert_equal('accounting source document: open cash after Treasury settles AD1', sum(amount), 121000 - 20000)
+from position_entry where family = 'cash' and stage = 'open'
+  and (source_type = 'accounting_source_document_line' or source_id like 'PAD1:%');
+select assert_equal('accounting source document: settled by Treasury', sum(amount), -12100)
+from position_entry where source_id like 'PAD1:%' and stage = 'settled';
 select assert_equal('accounting source document: stages still equal typed records', difference, 0)
 from stage_difference;
 select assert_equal('accounting source document: cash open still equals typed records', projection, typed_records)
@@ -507,10 +520,29 @@ from cash_open_state;
 select assert_equal('accounting source document: reconciles to the ledger', sum(abs(difference)), 0)
 from reconciliation;
 select assert_equal('accounting source document: ledger balances', sum(debit) - sum(credit), 0) from journal_line;
-update supplier_invoice set document_number = 'FA-2026-0077' where id = 'VB1';
-select assert_equal('the same supplier document registered by two products is detected', count(*), 1)
-from duplicate_registration;
+select assert_equal('accounting source document: reverse-charge VAT nets to zero', sum(debit) - sum(credit), 2100 - 21000)
+from journal_line where account_code = '343' and journal_entry_id in ('JE-AD1', 'JE-AD2', 'JE-AD3');
+select assert_equal('accounting source document: payable cleared by the payment', sum(credit) - sum(debit), 20000)
+from journal_line where account_code = '321' and journal_entry_id in ('JE-AD1', 'JE-AD3', 'JE-BAD1');
 rollback;
+
+-- A document registered by Procurement cannot also be captured by Accounting, and the
+-- same document number from the same party cannot be registered twice.
+do $$
+begin
+    insert into accounting_source_document (id, external_document_id, direction, issued_on, due_on, recorded_on)
+    values ('ADX', 'XD-VB1', 'received', '2026-03-31', '2026-04-30', '2026-04-03');
+    raise exception 'FAILED a document registered by Procurement was captured again by Accounting';
+exception when foreign_key_violation then null;
+end
+$$;
+do $$
+begin
+    insert into external_document values ('XD-DUP', 'received', 'SUPPLIER_A', 'A-26-0331', 'accounting');
+    raise exception 'FAILED the same supplier document number was registered twice';
+exception when unique_violation then null;
+end
+$$;
 
 \o
 \echo 'ALL ASSERTIONS PASSED'
