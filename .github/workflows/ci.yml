@@ -1,0 +1,102 @@
+name: CI
+
+# Language-agnostic gate. It knows Docker, Compose and Postgres, never a language toolchain.
+# - `pull_request`: fast feedback; stale runs of the same PR are cancelled.
+# - `merge_group`: the merge queue tests the exact commit that lands on main.
+# - `push` to main: Railway's "Wait for CI" needs a push-triggered workflow. The merge queue
+#   already tested this SHA, so only the cheap jobs run here.
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.scan.outputs.services }}
+      has_compose_ci: ${{ steps.scan.outputs.has_compose_ci }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: scan
+        run: |
+          services="$(find apps -mindepth 2 -maxdepth 2 -name Dockerfile -printf '%h\n' 2>/dev/null | sort \
+            | jq -R -s -c 'split("\n") | map(select(length > 0) | {name: (split("/") | last), dir: .})')"
+          echo "services=${services:-[]}" >> "$GITHUB_OUTPUT"
+          if [[ -f compose.ci.yml ]]; then
+            echo "has_compose_ci=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_compose_ci=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  repo-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: bash scripts/ci/repo-lint.sh
+
+  build:
+    needs: detect
+    if: github.event_name != 'push' && needs.detect.outputs.services != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.detect.outputs.services) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.service.dir }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+
+  test:
+    needs: detect
+    if: github.event_name != 'push' && needs.detect.outputs.has_compose_ci == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run compose.ci.yml (migrate if defined, then test)
+        run: |
+          project="ci-${GITHUB_RUN_ID}"
+          cleanup() { docker compose -p "$project" -f compose.ci.yml down -v --rmi local; }
+          trap cleanup EXIT
+          if docker compose -f compose.ci.yml config --services | grep -qx migrate; then
+            docker compose -p "$project" -f compose.ci.yml run --rm migrate
+          fi
+          docker compose -p "$project" -f compose.ci.yml run --rm test
+
+  # The only required status check. Skipped jobs count as success; failed or cancelled ones fail it.
+  ci:
+    if: always()
+    needs: [detect, repo-lint, build, test]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "Job results: $RESULTS"
+          if grep -Eq '"(failure|cancelled)"' <<< "$RESULTS"; then
+            echo "::error::A CI job failed or was cancelled."
+            exit 1
+          fi
