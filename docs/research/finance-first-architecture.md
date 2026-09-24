@@ -31,7 +31,7 @@ The model has eight parts:
    - Each business domain owns its record types: opportunity, contract, order, order response, receipt, invoice, invoice response, timesheet, payroll run, bank transaction, advance.
    - A product is a sellable set of features over those records. Adding a product adds features and new linked records. It never moves a record or takes one over.
    - A posted record is never edited. It is reversed or corrected by a new record.
-2. **Shared identities.** The platform owns what every product tags its records with: parties, roles, project identity, categories, items, periods and currencies. The Projects product owns the rest of a project: structure, budget, milestones and progress.
+2. **Shared lists.** The platform owns what every domain tags its records with: parties and roles, projects, cost centers (střediska), activities (činnosti), categories, items, periods and currencies. The domains are CRM, Private relationships, Sales, Spend, Inventory, People, Treasury, Accounting, FP&A and Documents; the full domain map, covering every part the brief names, is in section 10.
 3. **Typed fulfilment links.**
    - The domain that performs a fulfilment writes the link at that moment, with a quantity.
    - Links run from request to order, order to receipt, receipt to invoice, invoice to payment, advance to invoice, and payroll to timesheet.
@@ -44,7 +44,7 @@ The model has eight parts:
    - Each domain contributes one view of rules for its record types. The platform unions them. A view only returns rows for records that exist, so selling fewer products means fewer rows, never different rules.
    - Every entry carries `effective_on` (when it happened) and `recorded_on` (when we learned it).
    - It has no writers.
-6. **A separate plan store.** FP&A owns company versions and scenarios. Projects owns project budgets. A company version either references a project budget or replaces it, never both.
+6. **A separate plan store, owned by FP&A:** company, cost-center, activity and project budgets, forecasts, scenarios and cash plans. Projects is a product over FP&A's project financial control and owns no records.
 7. **A separate statutory ledger**, posted from the same typed records. A reconciliation contract ties it to the projection.
    - Accounting owns the chart of accounts and the rule that maps a record line to an account. Both ship with every product, so any record shows where it lands in the chart.
    - Sold alone, Accounting registers invoices and bank statements in the same records the Sales, Procurement and Treasury products use. Its journal entries point to those records.
@@ -183,6 +183,37 @@ Unit4's primary documentation was unreachable, so its row rests on marketing and
 - **Expenses.** Oracle, Xero and Acumatica put claims and cards on the finance or payables side. Money and Helios tie travel expenses to payroll. Hleb's ruling puts them on the spend side.
 - **E-invoice intake.** Xero converges every source on one set of core records. The Czech tools have one import path per format, ISDOC first. None of them documents EN 16931 as the pivot model. Section 7.7's single intake layer with EN 16931 semantics is a design choice, not an observed pattern.
 
+
+### 3.4 Where Sales, CRM, Projects and Documents sit (25 products)
+
+Evidence: [`module-evidence/`](module-evidence/), one file per group, each claim labelled. Finto could not be identified. Several products are narrow tools (Abacum, Numeric, Truewind, Concourse, ProcIndex, Cranston, Brex, Ramp) that own no sales records and read an ERP instead.
+
+| Product | Sales documents owned by | CRM | Projects | Documents module | Contacts |
+| --- | --- | --- | --- | --- | --- |
+| Odoo | `sale` (orders), `account` (invoices); POS has its own order | separate app, no reference to sales orders; a bridge app links them | owns tasks, money via analytic accounts | Enterprise only | one shared `res.partner` |
+| ERPNext / Frappe | Selling (quotes, orders), Accounts (invoices, also without an order) | built-in module; Frappe CRM is a separate app linked by API | owns projects, tasks, timesheets; no project invoices | generic `File` | shared |
+| SAP S/4HANA | SD (quote, order, billing document); FI derives the ledger | separate product (Sales Cloud), hands won deals to SD | PS owns WBS, billing plans, settlement | NOT FOUND | one Business Partner |
+| Dynamics 365 | two chains: D365 Sales and Finance/SCM, synced by dual-write with an ownership field; free-text invoice for no-order and asset sales | D365 Sales owns leads, opportunities and its own quotes and orders | Project Operations owns records | NOT FOUND | two masters, synced |
+| NetSuite | one transaction family for CRM, POS, e-commerce, subscriptions and asset disposal | owns leads, opportunities, cases; links to transactions | project is an entity | File Cabinet, linked to any record | one entity master |
+| Workday | Financials (contract, billing schedule, invoice) | none; "works with your CRM application" | basic projects are only worktags | NOT FOUND | NOT FOUND |
+| Xero | Accounting (quotes, invoices) | none | owns tasks and time; billing stays in Accounting | Files API, linked to any object | one shared `Contacts` |
+| QuickBooks | core (estimate, invoice, sales receipt) | Customer Hub on the shared customer record | a tag and dashboard only | NOT FOUND | one customer record |
+| Midday | invoices (customer optional; free-text name allowed) | none | owns tracker projects and entries | Vault | shared `customers` |
+| HELIOS | Obchod (quotes, orders), Fakturace (invoices), POS module | separate module | zakázky as a dimension | NOT FOUND | shared register |
+| Doss | Order Management, for every channel | Relationship Management hands off to it | owns budgets, job costing, milestones | NOT FOUND | inferred shared |
+| Rillet, Campfire | contract and invoice after closed-won | external only | none | attachments | NOT FOUND |
+| Fineract | loans and savings; accounting derives GL by product mapping | none | none; office and fund are dimensions | `Document` linked to any entity | clients |
+| Airtable | whatever table the builder chooses | a table | a table | attachment fields | one table linked within a base; across bases only by copying |
+
+**What this shows:**
+
+- **Sales documents are not CRM's.** CRM owns relationships and the pipeline before a commitment. A won deal is handed to a sales or order domain. The only exception, Dynamics 365, keeps two full sales chains and needs an ownership field to reconcile them.
+- **Every sales channel lands in one sales document family.** CRM deals, tills, e-commerce, subscriptions, one-off invoices to parties that are not in the CRM, and asset sales (NetSuite, Dynamics, Midday, ERPNext).
+- **Projects is either a dimension (QuickBooks, Workday basic projects, HELIOS) or an owner of delivery records** (SAP, Dynamics, Xero, Odoo, ERPNext, Doss). No product makes Projects own invoices.
+- **Documents, where it exists, is one generic file record linked to any record** (Xero, Midday, NetSuite, Fineract).
+- **Contacts are usually one shared list.** Split lists (Dynamics, Frappe CRM, Brex, Ramp) need syncing.
+- **Private relationship management exists in none of them.**
+
 ---
 
 ## 4. The alternatives
@@ -242,7 +273,6 @@ Owners are business domains, not products. A product is a sellable set of featur
 | Part | Owner | Prototype |
 | --- | --- | --- |
 | Identities, roles | Platform (project identity included) | `project`, `category`, `counterparty`, `employee` |
-| Projects: structure, budget, milestones, progress | Projects | project budget as plan version `B1`; the rest not built |
 | Agreements (contracts, framework, self-billing) | Sales (customer side), Procurement (supplier side, self-billing) | `agreement` |
 | Typed records: CRM | CRM | `opportunity`, `opportunity_outcome` |
 | Typed records: Sales | Sales domain | `sales_order_line`, `customer_invoice_line` |
@@ -253,7 +283,7 @@ Owners are business domains, not products. A product is a sellable set of featur
 | Stage rules | Each domain, for its own records; always active | `position_crm`, `position_sales`, `position_procurement`, `position_inventory`, `position_people`, `position_treasury` |
 | Helpers | Spend and Treasury domains | `purchase_order_line_terms` (accepted terms), `supplier_invoice_approval` (when an invoice counts), `settlement_line` (splits with largest-remainder rounding) |
 | Projection | Platform | `position_entry` (union of the domain views) |
-| Plans | FP&A (company versions, scenarios), Projects (project budgets) | `plan_version`, `plan_line` |
+| Plans (every budget, forecast, scenario and cash plan) | FP&A | `plan_version`, `plan_line` |
 | Ledger, chart, tax | Accounting | `account` (chart and category mapping), `journal_entry`, `journal_line`, `post_to_ledger` |
 
 A successor's rule reads its predecessor's price. That coupling only produces rows when both records exist. Each link table belongs to the successor's domain.
@@ -340,7 +370,7 @@ The correction kinds follow the Peppol paper's taxonomy.
 - **Remaining plan** = max(plan − consumed, 0). **Estimate at completion** = consumed + remaining plan.
 - **Scenarios** move only the uncommitted remainder.
 - **Sample policy.** Automatic consumption hides cost underruns and revenue losses. A manager's cost-to-complete would be a different writer of the same plan lines.
-- **Owners.** FP&A owns company versions and scenarios. Projects owns project budgets. A company version either references a project's budget or replaces it for that project, never both, so a project budget counts once. FP&A still sells alone: without Projects, its versions carry their own project lines, as `B1` does in the prototype.
+- **Owner.** FP&A owns every plan, including project budgets. Projects is a product over FP&A's project financial control and the shared project list, so a project budget exists once.
 - **Period.** Project control compares whole-life figures. Opex needs a period-bounded variant.
 
 ### 6.6 Ledger and reconciliation
@@ -449,11 +479,11 @@ The domain groups come from the Peppol paper; the owners are this report's propo
 | Catalogue and offering | Platform reference data | item text only | Catalogue 3.1 with response |
 | Agreement: contracts, framework, call-offs, self-billing | Sales (customer side), Procurement (supplier side) | self-billing agreement | Order Agreement 3.0, Self-billing 3.0 |
 | Ordering: orders, responses, changes, cancellations | Sales, Procurement | order + CA response | Ordering 3.3, Advanced Ordering 3.0 |
-| Operations: projects, work, milestones, acceptance | Projects (structure, milestones, progress), People (time) | timesheets | weak in Peppol |
+| Operations: projects, work, milestones, acceptance | Sales (billing milestones), People (time), FP&A (project financial control); delivery management is out of scope | timesheets | weak in Peppol |
 | Fulfilment: despatch, receipt, rejects, returns | Inventory / Procurement | receipts | Despatch Advice 3.1; Receipt Advice in Logistics |
 | Logistics | Out of scope for now | none | Logistics profiles |
 | Billing: invoices, credit and debit notes, self-billing, disputes | Sales domain (issued), spend domain (received); Accounting sold alone registers them in the same records (6.8) | invoices, corrective document, invoice responses | Billing 3.0, Self-billing 3.0, Invoice Response 3.2 |
-| Financial control: budgets, reservations, commitments | FP&A and Projects (budgets) + projection (commitments) | plan store, stages | not in Peppol |
+| Financial control: budgets, reservations, commitments | FP&A (budgets) + projection (commitments) | plan store, stages | not in Peppol |
 | Accounting | Accounting | ledger | not in Peppol |
 | Receivables and payables | Accounting (subledger) + projection (`open`) | open stage | invoice due data, BT-113 |
 | Settlement: payments, advances, offsets, write-offs | Treasury | allocations, advance application | UBL RemittanceAdvice (no Peppol profile) |
@@ -746,37 +776,56 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 6. **Buyers never combine products.**
 7. **An e-invoice exchange requirement** (ISDOC, Peppol, ViDA) cannot map onto typed records without losing a document-level meaning the ledger needs.
 8. **Products sold alone need conflicting states on the shared invoice.** For example, a feature in one product needs the invoice to behave in a way that another product's feature forbids, and one record cannot serve both without per-product copies.
-9. **Project budgets and company versions can't be kept apart**, because companies keep editing the same budget in both Projects and FP&A.
+9. **Project money needs records that are not plans and not domain facts**, for example a project-level record that no existing domain can own, so Projects would need records after all.
 
 ---
 
 ## 10. The final architecture and Hleb's rulings
 
-**Layers:**
+**Shared lists** (platform, not sold). Every domain tags its records with them, and none of them belongs to one product:
 
-1. **Platform** (not sold):
-   - parties and roles; identities of projects, categories, items, periods and currencies
-   - link conventions, the stage contract and projection engine, the plan-line contract
-   - the chart of accounts and account determination: Accounting-owned reference data, shipped with every product, read-only outside Accounting
-   - validation profiles (EN 16931 rules, versioned), audit
-   - the intake and exchange layer: mixed input mapped to EN 16931 semantics; each external document registered once; ISDOC and Peppol out
-2. **Products** (each sellable; a product is a set of features over domain records, and adding one never moves a record):
-   - **CRM**: opportunities, quotations.
-   - **Sales**: orders, customer contracts, customer invoices.
-   - **Procurement** (the spend side): requests, orders and responses, receipts, supplier contracts, supplier invoices and their approval, employee expense claims, card transactions.
-   - **Inventory**: stock movements and valuation.
-   - **People**: timesheets, payroll.
-   - **Projects**: project structure, budgets, milestones, progress, acceptance.
-   - **Treasury**: bank, settlement of every open item (including expense claims and cards), advances, payment orders, cash forecast.
-   - **FP&A**: company plans, scenarios, budget control.
-   - **Accounting**: chart of accounts and account determination, ledger, posting, VAT and tax, AR/AP subledger, close. Sold alone, it also registers invoices and bank statements and matches payments, on the same records the other products use.
-3. **Derived:** the position projection (all money figures), period-close snapshots, and the reconciliation to the ledger.
+- parties (companies and people) and their roles
+- projects (zakázky)
+- cost centers (střediska)
+- activities (činnosti)
+- categories, items, periods, currencies
+- the chart of accounts, which Accounting owns and ships read-only to every product
+
+**Domains.** Each domain owns its records. The last column says what a product built on the domain needs from other domains in order to sell alone.
+
+| Domain | Records it owns | Links to other domains | Money it contributes | To sell alone it also needs |
+| --- | --- | --- | --- | --- |
+| **CRM** | leads, deals, activities, communication log, relationship status | party; a won deal hands off to a Sales quote or order (Sales writes the link) | expected revenue (deal × probability) | nothing beyond the shared lists |
+| **Private relationships** (proposal) | private contacts, notes and reminders owned by one user and invisible to the company | optional link from a private contact to a shared party | none | nothing |
+| **Sales** | quotes, sales orders (including billing milestones), customer contracts, customer invoices and credit notes, till (POS) receipts, invoices for sold assets | deal (CRM), project, asset (Accounting), settlement (Treasury) | committed revenue, actual revenue, open cash | bank lines to mark invoices paid (Treasury records, basic import feature) |
+| **Spend** | requests, purchase orders, supplier responses, goods receipts, supplier invoices and approval, supplier advance requests (proformas), expense claims, card transactions, supplier contracts | request → order → receipt → invoice; project, cost center; settlement (Treasury) | expected, committed, incurred and actual cost; forecast and open cash | bank lines to mark invoices paid |
+| **Inventory** | stock receipts (with or without an order), issues, transfers, valuation | receipt ↔ order line (optional); issue → project or cost center | stock is an asset until issued; an issue is actual cost | nothing |
+| **People** | employees, employment contracts, timesheets, payroll runs with their own cost lines, time-based re-attribution of payroll cost | timesheet → project, cost center, activity; payroll → bank (Treasury) | incurred labour (hours × rate), actual labour (payroll cost lines), open payroll liabilities | nothing |
+| **Treasury** | bank accounts, statement lines, payment matches to any open item, classification of lines with no document (fees, interest, taxes, insurance, loans, own transfers), payment orders, advances, expected-cash items, loans | any open item in Sales, Spend, People or Accounting | settled cash, own forecast items | nothing |
+| **Accounting** | account determination, journal entries, internal documents (opening balance, depreciation, accruals, FX, WIP, VAT settlement), fixed asset register, VAT return and control statement, period close | every journal entry points to its source record | the statutory ledger; internal documents with a management category also count as actual | registering invoices and importing bank statements on the Sales, Spend and Treasury records (6.8) |
+| **FP&A** | plan versions (budget, forecast, scenario) on any shared list, cash plans, project financial control (budget, P&L, cash flow, forecast at completion, WIP, extra costs, variance), period review | reads the projection; never writes actuals | the plan side of every comparison | nothing: plans stand alone; actuals appear when other products are used |
+| **Documents** | files and their versions, links from any record to its files, the archive of e-invoice originals and scans used by intake | any record in any domain | none; it is the evidence behind every money record | nothing |
+
+**Products** (sellable feature bundles over the domains; adding one never moves a record): CRM, Private relationships, Sales, Procurement, Inventory, Payroll and timesheets (People), Treasury, Accounting, Budgeting (FP&A), Projects, Documents.
+
+- **Projects** is a product built on FP&A's project financial control, the shared project list and the records every domain tags with a project. It owns no records of its own.
+- **Cost centers and activities** are shared lists planned in FP&A. They are not projects.
+
+**Derived:** the position projection (all money figures), period-close snapshots, the reconciliation to the ledger, and the backward trace from any journal line to its source record, order, quote and CRM deal (transcript line 501).
+
+**Proposals in this revision** (Hleb can overrule):
+
+1. Documents is a generic file record linked to any record, the pattern in Xero Files, Midday Vault, NetSuite File Cabinet and Fineract (3.4).
+2. Private relationships are user-owned private contacts with an optional link to a shared party. None of the 25 products examined has this (3.4).
+3. The column "to sell alone it also needs" for every product.
+4. Sales documents belong to a Sales domain, not to CRM. CRM owns relationships and pipeline and hands a won deal to Sales. This is the pattern in every suite examined except Dynamics 365 (3.4).
 
 **Rulings (2026-09-24):**
 
 | # | Ruling | Where it lands |
 | --- | --- | --- |
-| D1 | Projects is a sellable product with its own records. | Project identity stays on the platform so every product can tag it. Projects owns structure, budget, milestones and progress (6.1, 6.5). |
+| D1 | Projects is a sellable product. Afframe watches projects in money terms: cash flow, P&L, milestones with their sales and expenses, WIP, extra costs. | Projects is a product over FP&A's project financial control and the shared project list. It owns no records (domain map above). |
+| S1 | Cost centers (střediska) and activities (činnosti) are not projects. | Shared lists, planned in FP&A |
 | D2 | Spend is part of Procurement and Treasury. There is no Spend product. | 6.8 |
 | D3 | One chart connected to everything, owned by Accounting. | 6.6 |
 | D4 | Research more vendors. | 3.3 |
@@ -820,7 +869,7 @@ The architecture only has to express each one as a domain's stage or posting rul
 - management adjustments; period-close snapshots
 - plan spreading; the period-bounded opex check
 - stored-projection equality test; a suggestion store for inferred matches
-- Projects records: structure, milestones, progress, acceptance
+- project delivery management (tasks, schedule, progress, acceptance): out of scope, Afframe watches project money only
 - expense claims and card transactions on the spend side
 - account determination as one function shared by posting and by record views
 - the intake layer: format mappings, OCR, keeping the originals
