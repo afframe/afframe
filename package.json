@@ -1,0 +1,15 @@
+{
+  "name": "afframe",
+  "private": true,
+  "description": "Repo tooling only: the Railway IaC SDK and the local gate. App services keep their own manifests under apps/.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "preflight": "bash scripts/ci/repo-lint.sh"
+  },
+  "devDependencies": {
+    "railway": "3.11.0"
+  }
+}
