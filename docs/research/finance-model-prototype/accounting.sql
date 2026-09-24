@@ -147,5 +147,40 @@ begin
     from new_entry ne
     join advance_application aa on aa.id = ne.source_id
     cross join lateral (values ('321', aa.amount, 0.00), ('314', 0.00, aa.amount)) v(account_code, debit, credit);
+
+    -- Source documents Accounting captured itself: received invoices as payables,
+    -- issued invoices as receivables.
+    with new_entry as (
+        insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
+        select 'JE-' || d.id, d.issued_on, d.recorded_on, 'accounting_source_document', d.id
+        from accounting_source_document d
+        on conflict (source_type, source_id) do nothing
+        returning id, source_id
+    )
+    insert into journal_line (journal_entry_id, account_code, project_id, debit, credit)
+    select ne.id, a.code, l.project_id,
+           case d.kind when 'received_invoice' then l.amount_net else 0 end,
+           case d.kind when 'issued_invoice' then l.amount_net else 0 end
+    from new_entry ne
+    join accounting_source_document d on d.id = ne.source_id
+    join accounting_source_document_line l on l.accounting_source_document_id = d.id
+    join account a on a.category_id = l.category_id
+    union all
+    select ne.id, '343', null,
+           case d.kind when 'received_invoice' then sum(l.vat_amount) else 0 end,
+           case d.kind when 'issued_invoice' then sum(l.vat_amount) else 0 end
+    from new_entry ne
+    join accounting_source_document d on d.id = ne.source_id
+    join accounting_source_document_line l on l.accounting_source_document_id = d.id
+    group by ne.id, d.kind
+    having sum(l.vat_amount) <> 0
+    union all
+    select ne.id, case d.kind when 'received_invoice' then '321' else '311' end, null,
+           case d.kind when 'issued_invoice' then sum(l.amount_net + l.vat_amount) else 0 end,
+           case d.kind when 'received_invoice' then sum(l.amount_net + l.vat_amount) else 0 end
+    from new_entry ne
+    join accounting_source_document d on d.id = ne.source_id
+    join accounting_source_document_line l on l.accounting_source_document_id = d.id
+    group by ne.id, d.kind;
 end
 $$;

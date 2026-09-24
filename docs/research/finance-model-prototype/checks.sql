@@ -207,22 +207,31 @@ group by 3
 union all
 select 'revenue', 'actual', l.project_id, sum(l.amount_net)
 from customer_invoice_line l
-group by 3;
+group by 3
+union all
+select case d.kind when 'issued_invoice' then 'revenue' else 'cost' end, 'actual', l.project_id, sum(l.amount_net)
+from accounting_source_document_line l
+join accounting_source_document d on d.id = l.accounting_source_document_id
+group by 1, 3;
 
-select assert_equal('every cost and revenue stage equals the open remainder of typed records',
-    sum(abs(coalesce(p.amount, 0) - coalesce(s.amount, 0))), 0)
+create temporary view stage_difference as
+select sum(abs(coalesce(p.amount, 0) - coalesce(s.amount, 0))) as difference
 from (select family, stage, coalesce(project_id, '-') as project_id, sum(amount) as amount
       from state_position group by 1, 2, 3) s
 full join (select family, stage, coalesce(project_id, '-') as project_id, sum(amount) as amount
            from position_entry where family in ('cost', 'revenue') group by 1, 2, 3) p
 using (family, stage, project_id);
 
+select assert_equal('every cost and revenue stage equals the open remainder of typed records', difference, 0)
+from stage_difference;
+
 -- Cash completeness: settled equals the bank; open equals documents minus settlements.
 select assert_equal('cash settled equals bank movements',
     (select sum(amount) from position_entry where family = 'cash' and stage = 'settled'),
     (select sum(amount) from bank_transaction));
-select assert_equal('cash open equals unpaid counting documents and payroll',
-    (select sum(amount) from position_entry where family = 'cash' and stage = 'open'),
+
+create temporary view cash_open_state as
+select (select sum(amount) from position_entry where family = 'cash' and stage = 'open') as projection,
     (select sum(amount_net + vat_amount) from customer_invoice_line)
     - (select sum(l.amount_net + l.vat_amount) from supplier_invoice_line l
        join supplier_invoice_approval a on a.supplier_invoice_id = l.supplier_invoice_id and a.counts_from is not null)
@@ -230,7 +239,23 @@ select assert_equal('cash open equals unpaid counting documents and payroll',
     - (select coalesce(sum(amount), 0) from payment_allocation where customer_invoice_id is not null)
     + (select coalesce(sum(amount), 0) from payment_allocation where supplier_invoice_id is not null or payroll_run_id is not null)
     + (select coalesce(sum(aa.amount), 0) from advance_application aa
-       join supplier_invoice_approval a on a.supplier_invoice_id = aa.supplier_invoice_id and a.counts_from is not null));
+       join supplier_invoice_approval a on a.supplier_invoice_id = aa.supplier_invoice_id and a.counts_from is not null)
+    + (select coalesce(sum(case d.kind when 'issued_invoice' then 1 else -1 end * (l.amount_net + l.vat_amount)), 0)
+       from accounting_source_document_line l
+       join accounting_source_document d on d.id = l.accounting_source_document_id) as typed_records;
+
+select assert_equal('cash open equals unpaid counting documents and payroll', projection, typed_records)
+from cash_open_state;
+
+-- One source per actual amount: an external document is registered by exactly one
+-- product, either the owning product or Accounting when that product is not installed.
+create temporary view duplicate_registration as
+select d.id
+from accounting_source_document d
+join supplier_invoice si on si.counterparty_id = d.counterparty_id and si.document_number = d.document_number
+where d.kind = 'received_invoice';
+
+select assert_equal('each supplier document is registered once', count(*), 0) from duplicate_registration;
 
 -- Worked-example figures (copied into the report).
 select assert_equal('P1 materials expected (1 open frame at the 30 000 estimate)', expected, 30000),
@@ -462,6 +487,29 @@ insert into bank_transaction values ('RB1', '2026-05-10', -100, 'rounding probe'
 insert into payment_allocation (id, bank_transaction_id, supplier_invoice_id, amount) values ('RPA1', 'RB1', 'R1', 100);
 select assert_equal('rounding: settled equals the payment', sum(amount), -100)
 from position_entry where source_id like 'RPA1:%' and stage = 'settled';
+rollback;
+
+-- Accounting sold alone: a document Accounting captures itself counts once, keeps the
+-- generic invariants and the reconciliation, and cannot also be registered by Procurement.
+begin;
+insert into accounting_source_document values
+    ('AD1', 'received_invoice', 'SUPPLIER_A', 'FA-2026-0077', '2026-05-15', '2026-06-14', '2026-05-16');
+insert into accounting_source_document_line values ('AD1-1', 'AD1', null, 'materials', 10000, 2100);
+call post_to_ledger();
+select assert_equal('accounting source document: cost actual', sum(amount), 10000)
+from position_entry where source_type = 'accounting_source_document_line' and family = 'cost' and stage = 'actual';
+select assert_equal('accounting source document: open cash', sum(amount), -12100)
+from position_entry where source_type = 'accounting_source_document_line' and family = 'cash' and stage = 'open';
+select assert_equal('accounting source document: stages still equal typed records', difference, 0)
+from stage_difference;
+select assert_equal('accounting source document: cash open still equals typed records', projection, typed_records)
+from cash_open_state;
+select assert_equal('accounting source document: reconciles to the ledger', sum(abs(difference)), 0)
+from reconciliation;
+select assert_equal('accounting source document: ledger balances', sum(debit) - sum(credit), 0) from journal_line;
+update supplier_invoice set document_number = 'FA-2026-0077' where id = 'VB1';
+select assert_equal('the same supplier document registered by two products is detected', count(*), 1)
+from duplicate_registration;
 rollback;
 
 \o

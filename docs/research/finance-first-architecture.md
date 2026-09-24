@@ -5,7 +5,7 @@ Research answer to `finance-first-erp-research-brief.md`, extended with the Pepp
 What comes with this report:
 
 - **Evidence**: one file per source group, each claim with a quote and a URL. See [`finance-first-evidence/`](finance-first-evidence/).
-- **A runnable model and a worked example**: [`finance-model-prototype/`](finance-model-prototype/). It runs on PostgreSQL 18, and all 64 assertions pass.
+- **A runnable model and a worked example**: [`finance-model-prototype/`](finance-model-prototype/). It runs on PostgreSQL 18, and all 72 assertions pass.
 - **Independent review**: two critical review rounds. The first found four money defects, the second found three more in advance handling and one design gap. All are fixed, and each is now a regression check. Eight deliberate rule mutations each make the checks fail (section 8.12).
 
 **Evidence labels** used throughout:
@@ -30,7 +30,7 @@ The model has eight parts:
 1. **Typed records are the only writable truth.**
    - Each product owns its records: opportunity, contract, order, order response, receipt, invoice, invoice response, timesheet, payroll run, bank transaction, advance.
    - A posted record is never edited. It is reversed or corrected by a new record.
-2. **Shared identities.** The platform owns parties, roles, projects, categories, items, periods and currencies.
+2. **Shared identities.** The platform owns what every product tags its records with: parties, roles, project identity, categories, items, periods and currencies. The Projects product owns the rest of a project: structure, budget, milestones and progress.
 3. **Typed fulfilment links.**
    - The product that performs a fulfilment writes the link at that moment, with a quantity.
    - Links run from request to order, order to receipt, receipt to invoice, invoice to payment, advance to invoice, and payroll to timesheet.
@@ -43,11 +43,13 @@ The model has eight parts:
    - Each product contributes one view of rules. The platform unions the views of the installed products.
    - Every entry carries `effective_on` (when it happened) and `recorded_on` (when we learned it).
    - It has no writers.
-6. **A separate plan store** for FP&A versions and scenarios.
+6. **A separate plan store.** FP&A owns company versions and scenarios. Projects owns project budgets. A company version either references a project budget or replaces it, never both.
 7. **A separate statutory ledger**, posted from the same typed records. A reconciliation contract ties it to the projection.
+   - Accounting owns the chart of accounts and the rule that maps a record line to an account. Both ship with every product, so any record shows where it lands in the chart.
+   - When a document's owning product is not installed, Accounting captures the document itself. Otherwise its journal entry only points to the owner's record.
 8. **Peppol / UBL / EN 16931 as the reference domain layer, not the internal schema.**
    - It supplies the missing business vocabulary: party roles, agreements, order and invoice responses, self-billing, prepayments, correction kinds and amount rules.
-   - It fixes the boundary for exchanging documents with other companies: ISDOC today, and EN 16931 e-invoices for intra-EU B2B under ViDA from 1 July 2030. Domestic e-invoicing becomes mandatory only if the Czech Republic mandates it; no plan was found.
+   - It fixes the boundary for exchanging documents with other companies. One intake layer takes mixed input (Peppol, ISDOC, PDF and scans) and maps every format to EN 16931 semantics, then to the owning product's typed record. EN 16931 e-invoices become the default for intra-EU B2B under ViDA from 1 July 2030. Domestic e-invoicing becomes mandatory only if the Czech Republic mandates it; no plan was found.
 
 **What separates this from the two rejected designs:**
 
@@ -145,6 +147,41 @@ Details are in `peppol-ordering-ubl.md`, `peppol-billing-en16931.md` and `cz-ein
 4. **Peppol confirms the same shape across companies.** Its documents are typed, each points to its predecessor, and responses are separate documents with codes that bound their lifecycle. It never uses a universal graph.
 5. **Peppol has gaps.** It covers commitments, budgets, payroll, the ledger, bank reconciliation and planning weakly or not at all. Those come from the ERP patterns.
 
+### 3.3 Product boundaries in more vendors
+
+These are the vendors Hleb chose, researched for architecture only: product boundaries and record ownership. Evidence files:
+
+- [`oracle-unit4-acumatica.md`](finance-first-evidence/oracle-unit4-acumatica.md)
+- [`xero-sap-b1.md`](finance-first-evidence/xero-sap-b1.md)
+- [`cz-erp-tools.md`](finance-first-evidence/cz-erp-tools.md)
+
+Unit4's primary documentation was unreachable, so its row rests on marketing and third-party pages. SAP Business One's help portal did not render, so several of its answers are inferred or third-party.
+
+| Vendor | Who owns invoices and bank | Chart of accounts | Projects | Expenses | Inbound e-invoices | Label |
+| --- | --- | --- | --- | --- | --- | --- |
+| Oracle Fusion | Payables and Receivables own invoices; Subledger Accounting derives the journal. No GL-only edition found. | The ledger sets the chart for its subledgers. | PPM, a separate pillar | Expenses, processed through Payables | Peppol BIS 3.0 in and out; separate subsystems per channel | documented / source |
+| Unit4 ERPx | AP and AR modules, integrated with GL | configurable; mapping not found | Project Management module (budgets, time and expense) | not found | eConnect: Peppol, and PDF via OCR into structured XML, keeping the PDF | source |
+| Acumatica | GL, AP, AR, cash and tax sold as one Financials module; GL alone is not sold | GL owns the chart; AP and PO lines default the account from the vendor or item | Project Accounting, a separate module | Advanced Expense Management (claims, corporate cards) | ML/OCR document recognition into AP bills | documented / inferred |
+| Xero | The accounting core owns invoices, bills and bank transactions outright. Projects and Expenses link to or create those core records. | One chart in the core; tracking categories are a separate dimension; apps map to the chart when they connect. | Xero Projects, an add-on: tasks, time, budgets, no ledger records of its own | Xero Expenses, an add-on: an approved claim becomes a bill | Hubdoc and apps all create the same core records | documented |
+| SAP Business One | Sales and Purchasing documents own A/R and A/P invoices and generate linked journal entries. One license, not separate products. | Financials owns the chart; G/L account determination maps other modules to it. | Project Management module | not found | not found; partner add-ons | inferred / third-party |
+| POHODA | The journal is fed from the invoice, bank, cash and stock agendas, all inside the accounting product. A separate internal document (interní doklad) covers postings with no primary document. | Accounting owns the chart; předkontace on each document drives posting. | Zakázky: a tagging dimension with a plan, built in | GLX, a separate product that also runs standalone | ISDOC import, including ISDOC inside PDF | documented |
+| Money S3/S4/S5 | Invoice and bank agendas plus internal documents, as in POHODA | předkontace on documents | S5 only; not found for S3/S4 | Travel module, tied to payroll | ISDOC and Money's own richer XML: two formats | documented |
+| ABRA Flexi / Gen | Invoices own a Posting tab that links to their entries. The journal is "a view over the line items of all accounting documents". Internal documents exist. | Accounting owns the chart; předkontace is mandatory before posting; the account can be seen from each document. | Zakázky and projects as linkable dimensions | not found (third-party tools) | ISDOC through the UI, REST and a mailbox, all into one received-invoice record | documented |
+| Helios iNuvio | The journal shows entries generated from other modules' primary documents. | Kontace: a shared list used across modules | Zakázky, a separately priced module | Travel (Doprava), feeding payroll and cash | ISDOC through the rpISDOC plugin | documented |
+
+**What this shows for Afframe's rulings:**
+
+- **Invoices and bank when Accounting is sold alone.** Three patterns exist:
+  - Accounting owns invoices outright, and other products create them through it: Xero, and in effect the Czech tools, whose accounting product contains the invoice agendas.
+  - Business modules own invoices, and accounting derives the journal: Oracle and SAP Business One.
+  - The two are sold together, so accounting never runs alone: Acumatica.
+
+  No examined product sells a ledger alone while leaving invoices to separately sold products. Section 6.8 combines the first two patterns, which none of them does. That makes it this report's proposal, not an observed pattern.
+- **Chart of accounts.** Every vendor has one chart owned by the ledger, mapped to other records by rules: account determination, předkontace, kontace, item and vendor defaults. ABRA Flexi shows the account from each document. This supports the ruling in 6.6.
+- **Projects.** Oracle, Unit4, Acumatica, Xero and Helios sell projects separately. POHODA and ABRA treat them as a tagging dimension. Xero Projects owns tasks, time and budgets but no ledger records. That matches ruling D1 with the project identity kept on the platform.
+- **Expenses.** Oracle, Xero and Acumatica put claims and cards on the finance or payables side. Money and Helios tie travel expenses to payroll. Hleb's ruling puts them on the spend side.
+- **E-invoice intake.** Xero converges every source on one set of core records. The Czech tools have one import path per format, ISDOC first. None of them documents EN 16931 as the pivot model. Section 7.7's single intake layer with EN 16931 semantics is a design choice, not an observed pattern.
+
 ---
 
 ## 4. The alternatives
@@ -201,19 +238,21 @@ If Afframe only needed budget-vs-ledger reporting, conformed dimensions plus a w
 
 | Part | Owner | Prototype |
 | --- | --- | --- |
-| Identities, roles | Platform | `project`, `category`, `counterparty`, `employee` |
-| Agreements (contracts, framework, self-billing) | Agreement domain; the owning product is open (D6) | `agreement` |
+| Identities, roles | Platform (project identity included) | `project`, `category`, `counterparty`, `employee` |
+| Projects: structure, budget, milestones, progress | Projects | project budget as plan version `B1`; the rest not built |
+| Agreements (contracts, framework, self-billing) | Sales (customer side), Procurement (supplier side, self-billing) | `agreement` |
 | Typed records: CRM | CRM | `opportunity`, `opportunity_outcome` |
-| Typed records: Sales | Sales (customer invoices: owner open, D6) | `sales_order_line`, `customer_invoice_line` |
-| Typed records: Procurement | Procurement (supplier invoices and invoice responses: owner open, D6) | `material_request_line`, `purchase_order_line`, `order_response(_line)`, `goods_receipt_line`, `supplier_invoice_line`, `invoice_response` |
+| Typed records: Sales | Sales | `sales_order_line`, `customer_invoice_line` |
+| Typed records: Procurement | Procurement, the spend side (also expense claims and card transactions: not built) | `material_request_line`, `purchase_order_line`, `order_response(_line)`, `goods_receipt_line`, `supplier_invoice_line`, `invoice_response` |
 | Typed records: Inventory | Inventory | `stock_issue_line` |
 | Typed records: People | People | `timesheet_entry`, `payroll_run`, `payroll_allocation` |
-| Typed records: Treasury | Treasury (Accounting sold alone also needs these: D6) | `bank_transaction`, `payment_allocation` (invoice, payroll or order advance), `advance_application` |
-| Stage rules | Each product, for its own records | `position_crm`, `position_sales`, `position_procurement`, `position_inventory`, `position_people`, `position_treasury` |
+| Typed records: Treasury | Treasury | `bank_transaction`, `payment_allocation` (invoice, payroll or order advance), `advance_application` |
+| Stage rules | Each product, for its own records | `position_crm`, `position_sales`, `position_procurement`, `position_inventory`, `position_people`, `position_treasury`, `position_accounting` |
 | Helpers | Procurement, Treasury | `purchase_order_line_terms` (accepted terms), `supplier_invoice_approval` (when an invoice counts), `settlement_line` (splits with largest-remainder rounding) |
 | Projection | Platform | `position_entry` (union of installed products) |
-| Plans | FP&A | `plan_version`, `plan_line` |
-| Ledger | Accounting | `account`, `journal_entry`, `journal_line`, `post_to_ledger` |
+| Plans | FP&A (company versions, scenarios), Projects (project budgets) | `plan_version`, `plan_line` |
+| Ledger, chart, tax | Accounting | `account` (chart and category mapping), `journal_entry`, `journal_line`, `post_to_ledger` |
+| Documents Accounting captures itself | Accounting, only when the owning product is not installed (6.8) | `accounting_source_document(_line)` |
 
 A successor's rule reads its predecessor's price. That coupling only exists when both products are installed. Each link table belongs to the successor's product.
 
@@ -246,7 +285,7 @@ A successor's rule reads its predecessor's price. That coupling only exists when
 
 **What "counting" means:** a supplier invoice counts from registration, or, when it needs approval, from our first AP or CA invoice response. RE is terminal and allowed only before acceptance. Payments and advance applications count only against counting invoices.
 
-These are **our own policy rules**, stricter than Peppol. Peppol only forbids responses after RE or PD, and anything other than PD after AP. Counting a CA ("conditionally accepted") invoice at full value is open decision F12.
+These are **our own policy rules**, stricter than Peppol. Peppol only forbids responses after RE or PD, and anything other than PD after AP. Counting a CA ("conditionally accepted") invoice at full value is one such policy. These are workflow rules; the prototype's choices are samples, not architecture.
 
 **Asserted in `checks.sql`:**
 
@@ -269,7 +308,7 @@ A successor relieves *linked quantity × predecessor price* and books its own am
 - **Example.** A request for 10 frames at 30,000, then an order for 6 at 32,000: `expected` −180,000, `committed` +192,000. The 4 frames still open stay at 30,000.
 - **Closure.** A request or order closure record relieves the rest (described, not exercised).
 - **Rejected quantities.** A quantity rejected at receipt stays committed until the order is changed or cancelled.
-- **Stale remainders** need a closure policy (F9).
+- **Stale remainders** need a closure policy, which is a workflow rule.
 
 ### 6.4 Corrections
 
@@ -298,7 +337,8 @@ The correction kinds follow the Peppol paper's taxonomy.
   - revenue = committed + actual (pipeline is not consumed)
 - **Remaining plan** = max(plan − consumed, 0). **Estimate at completion** = consumed + remaining plan.
 - **Scenarios** move only the uncommitted remainder.
-- **Weakness.** Automatic consumption hides cost underruns and revenue losses (F3).
+- **Sample policy.** Automatic consumption hides cost underruns and revenue losses. A manager's cost-to-complete would be a different writer of the same plan lines.
+- **Owners.** FP&A owns company versions and scenarios. Projects owns project budgets. A company version either references a project's budget or replaces it for that project, never both, so a project budget counts once. FP&A still sells alone: without Projects, its versions carry their own project lines, as `B1` does in the prototype.
 - **Period.** Project control compares whole-life figures. Opex needs a period-bounded variant.
 
 ### 6.6 Ledger and reconciliation
@@ -306,13 +346,21 @@ The correction kinds follow the Peppol paper's taxonomy.
 - **Posting.**
   - Accounting posts from typed records only, and posts supplier invoices when they count.
   - Advances are booked Dr 314 / Cr 221, and their application Dr 321 / Cr 314. VAT on advances is not modelled.
-  - Czech law says nothing explicit about booking a disputed received invoice, so posting on registration versus on approval is F10.
+  - Czech law says nothing explicit about booking a disputed received invoice, so posting on registration versus on approval is a workflow policy. The prototype posts on approval.
 - **Reconciliation.** For each project (or none) × category × month, projection `actual` must equal the ledger. Reason codes cover:
   - posting timing
   - ledger-only accruals
   - work in progress
 
   `incurred` never reconciles, by design.
+- **Chart of accounts.** One chart for every product, owned by Accounting.
+  - Every typed record line carries a category. Accounting's account determination maps it (plus record facts such as "for stock") to an account.
+  - The chart and the determination rules are reference data. They ship with every product and are read-only outside Accounting, so any record can show which account it will hit.
+  - Each journal entry points back to its source record (`source_type`, `source_id`).
+  - Only Accounting edits the chart and only Accounting posts, so the statutory books stay separate from management views.
+  - This concrete form is this report's proposal.
+  - **Built:** the category mapping in `account` and the trace from a journal entry back to its source.
+  - **Not built:** one determination function shared by posting and by record views. `post_to_ledger` still hardcodes 112, 311, 314, 321, 331 and 343.
 - **Actual-source rule.** Each actual amount has one source record. Documents held in Afframe feed `actual`. Imported external ledger lines feed `actual` only when no Afframe document carries the same source reference (supplier VAT ID + document number).
 
 ### 6.7 VAT and Czech rules
@@ -324,13 +372,34 @@ The correction kinds follow the Peppol paper's taxonomy.
 | **Deduction** (§§ 72, 73): from the period in which the tax document is held | VB1, dated 31 March and received 3 April, belongs to the April return. A separate VAT claim date is needed; it is not in the prototype. |
 | **Advances** (§ 20a): VAT is due when an advance is received (official). The proforma is not a tax document, and there is no tax point under reverse charge (both third-party only). | the prototype models the advance's cash and ledger effect, not its VAT timing |
 | **Self-billing** (§ 28): written authorisation required (third-party source; re-check the law text). This is a Czech rule, not a Peppol one. | modelled as an `agreement` of kind `self_billing` and checked. Not used for reverse-charge supplies because that combination was not verified. |
-| **Model conventions** | cost and revenue are net + non-deductible VAT; cash is gross; deductible VAT is company-level. SAP's net cash is an alternative (F2). |
+| **Model conventions** | cost and revenue are net + non-deductible VAT; cash is gross; deductible VAT is company-level. SAP's net cash is an alternative policy. |
 
 ### 6.8 Sellability
 
 - Every product contributes a view for its own records only, and installing a product adds rows, never rules.
 - Cash is company-wide, and project is a filter.
-- Who owns invoices and contracts when Accounting is sold alone is open (D6).
+- **Spend and employee expenses** belong to the spend side (Procurement), not to People. An expense claim or a card transaction is a Procurement cost record, and Treasury settles it (repays the employee or clears the card statement). The Treasury line only settles; it never carries the cost a second time. People keeps timesheets and payroll. Not built.
+- **Tax** (VAT returns, control statement) is part of Accounting.
+
+**When Accounting is sold alone (this report's proposal).**
+
+Each domain owns its own records. Accounting owns accounting, the spend side owns spend documents and Sales owns sales documents. Accounting never takes over another product's document. Czech law allows this split: Act 563/1991 § 11(1) lets the facts of one accounting document sit in several records, provided an identifier links them ([zakonyprolidi.cz](https://www.zakonyprolidi.cz/cs/1991-563), official).
+
+- **Owning product installed.** It registers the document (supplier invoice, customer invoice, bank transaction). Accounting's journal entry points to it.
+  - Oracle works this way: Payables and Receivables own invoices, and Subledger Accounting derives the journal.
+  - So do the Czech tools. Their journal is fed from the invoice, bank and stock agendas; ABRA Flexi calls it "a view over the line items of all accounting documents".
+- **Owning product not installed.** Accounting captures the document itself as an `accounting_source_document`, through the same intake layer, with the facts it needs to post: party, number, dates, lines and VAT.
+  - It adds `actual` and `open` to the projection through its own view, like any other product.
+  - The Czech tools keep invoice and bank agendas inside the accounting product. They add a separate internal document (interní doklad) for postings that have no primary document (3.3).
+  - Xero goes further: its accounting core owns every invoice and bank record, and add-ons create them through it. The proposal here differs because it keeps Hleb's rule that each domain owns its own records once its product is installed.
+- **One source per amount.** An external document is registered once, by its owning product or by Accounting, never both. The key is counterparty plus document number (EN 16931 BT-1).
+- **Adding a product later** changes who registers new documents from that date. Documents Accounting already captured stay where they are, and nothing is re-homed.
+- **Contracts** stay with Sales and Procurement. Accounting does not need them to post, except for the self-billing authorisation, which is Procurement's agreement.
+- **Bank statements** follow the same rule: Treasury registers them when installed, otherwise Accounting captures them. Described, not built.
+- **Built and checked** (probe in `checks.sql`):
+  - A received invoice captured by Accounting counts once in the projection and keeps both generic invariants.
+  - It posts and reconciles to the ledger.
+  - A second registration of the same supplier document by Procurement is detected.
 
 ### 6.9 Physical options
 
@@ -362,13 +431,13 @@ The domain groups come from the Peppol paper; the owners are this report's propo
 | Identity and governance: parties, roles, periods, currencies, audit, validation profiles | Platform | parties, agreement kinds | party roles, EN 16931 rules |
 | Market and sourcing: opportunities, RFQ, quotations | CRM (sell side), Procurement (buy side) | opportunities | UBL RFQ/Quotation; pre-award is outside Peppol post-award |
 | Catalogue and offering | Platform reference data | item text only | Catalogue 3.1 with response |
-| Agreement: contracts, framework, call-offs, self-billing | Sales and Procurement, or a Contracts product (D6) | self-billing agreement | Order Agreement 3.0, Self-billing 3.0 |
+| Agreement: contracts, framework, call-offs, self-billing | Sales (customer side), Procurement (supplier side) | self-billing agreement | Order Agreement 3.0, Self-billing 3.0 |
 | Ordering: orders, responses, changes, cancellations | Sales, Procurement | order + CA response | Ordering 3.3, Advanced Ordering 3.0 |
-| Operations: projects, work, milestones, acceptance | Projects (D1), People | timesheets | weak in Peppol |
+| Operations: projects, work, milestones, acceptance | Projects (structure, milestones, progress), People (time) | timesheets | weak in Peppol |
 | Fulfilment: despatch, receipt, rejects, returns | Inventory / Procurement | receipts | Despatch Advice 3.1; Receipt Advice in Logistics |
 | Logistics | Out of scope for now | none | Logistics profiles |
-| Billing: invoices, credit and debit notes, self-billing, disputes | Billing domain (D6) | invoices, corrective document, invoice responses | Billing 3.0, Self-billing 3.0, Invoice Response 3.2 |
-| Financial control: budgets, reservations, commitments | FP&A (budgets) + projection (commitments) | plan store, stages | not in Peppol |
+| Billing: invoices, credit and debit notes, self-billing, disputes | Sales (issued), Procurement (received); Accounting when that product is not installed (6.8) | invoices, corrective document, invoice responses | Billing 3.0, Self-billing 3.0, Invoice Response 3.2 |
+| Financial control: budgets, reservations, commitments | FP&A and Projects (budgets) + projection (commitments) | plan store, stages | not in Peppol |
 | Accounting | Accounting | ledger | not in Peppol |
 | Receivables and payables | Accounting (subledger) + projection (`open`) | open stage | invoice due data, BT-113 |
 | Settlement: payments, advances, offsets, write-offs | Treasury | allocations, advance application | UBL RemittanceAdvice (no Peppol profile) |
@@ -452,6 +521,12 @@ EN 16931-1 was revised in May 2026, and the 2017 version stays compliant during 
 
 - **ISDOC** is the Czech national format in daily use between accounting systems. The Czech public sector must accept EN 16931 e-invoices in UBL 2.1, CII or ISDOC ≥ 5.2.
 - **ViDA.** From 1 July 2030, VAT Directive Art. 218 makes electronic invoices to the European standard the default. That covers intra-EU B2B reporting, and Member States may mandate domestic e-invoicing. No Czech domestic B2B mandate was found.
+- **Mixed input.** One intake layer handles every inbound source: Peppol (UBL, CII), ISDOC, other national XML, e-mailed PDF and scans.
+  - Each format maps to EN 16931 semantics (the BT business terms) at the boundary. From there it maps to the typed record of the owning product, or to an Accounting source document when that product is not installed.
+  - EN 16931 is the boundary vocabulary, not the internal schema (line 4824).
+  - The original file is kept as evidence.
+  - Fields extracted from PDF or scans are inferred until a person or a rule confirms them. That needs the suggestion store listed as not built in 7.9.
+  - Outbound runs the other way: typed record → EN 16931 semantics → Peppol or ISDOC.
 - **Rule.** Inbound and outbound documents map to and from typed records at the boundary. An inbound invoice creates a supplier invoice that still needs our acceptance (external validity ≠ internal approval). A Message Level Response (technical receipt) is not an Invoice Response (business decision).
 
 ### 7.8 What Peppol does not cover
@@ -479,7 +554,7 @@ These come from the ERP patterns in 3.1 and from the prototype, not from Peppol:
 
 ## 8. Worked example
 
-Every number below is copied from `checks.sql` output on PostgreSQL 18.6. The run ends with `ALL ASSERTIONS PASSED` (64 assertions, including regression probes run in rolled-back transactions).
+Every number below is copied from `checks.sql` output on PostgreSQL 18.6. The run ends with `ALL ASSERTIONS PASSED` (72 assertions, including regression probes run in rolled-back transactions).
 
 ### 8.1 Stored records (project P1, fit-out for Client X; CZK)
 
@@ -630,7 +705,7 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 
 ### 8.12 The checks have teeth
 
-| Mutation of `model.sql` | Caught by |
+| Mutation of `model.sql` or `accounting.sql` | Caught by |
 | --- | --- |
 | A: invoice relieves `incurred` at invoice value | generic invariant, off by 1,000 |
 | B: order relieves the request at order price | generic invariant, off by 10,000 |
@@ -640,6 +715,8 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 | F: advance application keeps its forecast relief | P1 cash forecast 262,410 instead of 237,000 |
 | G: advance spread by accepted instead of ordered value | projection fails with division by zero on a rejected order |
 | H: advance application ignores the approval gate | the probe on an unapproved invoice finds the application counted |
+| I: Accounting's view left out of the projection | the Accounting-alone probe finds no cost actual instead of 10,000 |
+| J: an Accounting-captured invoice books VAT into cost | the Accounting-alone probe finds a reconciliation difference of 2,100 |
 | (rounding probe) | 100 paid over three lines of 100 settles to the cent |
 
 ---
@@ -653,51 +730,58 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 5. **Controllers need frequent manual adjustments**, and the adjustment record grows into a general journal.
 6. **Buyers never combine products.**
 7. **An e-invoice exchange requirement** (ISDOC, Peppol, ViDA) cannot map onto typed records without losing a document-level meaning the ledger needs.
+8. **Customers need to re-home documents** that Accounting captured onto Sales or Procurement records after adding those products. Or Accounting-alone customers need most of Procurement's features (approval, matching) on captured documents, so the two registration paths become duplicates.
+9. **Project budgets and company versions can't be kept apart**, because companies keep editing the same budget in both Projects and FP&A.
 
 ---
 
-## 10. The final architecture and what is left to decide
+## 10. The final architecture and Hleb's rulings
 
 **Layers:**
 
 1. **Platform** (not sold):
-   - parties and roles, reference data (items, projects as a dimension, categories, periods, currencies)
-   - link conventions, the stage contract and projection engine
+   - parties and roles; identities of projects, categories, items, periods and currencies
+   - link conventions, the stage contract and projection engine, the plan-line contract
+   - the chart of accounts and account determination: Accounting-owned reference data, shipped with every product, read-only outside Accounting
    - validation profiles (EN 16931 rules, versioned), audit
-   - the document exchange boundary (ISDOC, later Peppol)
+   - the intake and exchange layer: mixed input mapped to EN 16931 semantics; ISDOC and Peppol out
 2. **Products** (each sellable, each owning its records and contributing its stage rules):
    - **CRM**: opportunities, quotations.
-   - **Sales**: orders; customer contracts and invoices, depending on D6.
-   - **Procurement**: requests, orders and responses, receipts; supplier contracts, invoices and their approval, depending on D6.
+   - **Sales**: orders, customer contracts, customer invoices.
+   - **Procurement** (the spend side): requests, orders and responses, receipts, supplier contracts, supplier invoices and their approval, employee expense claims, card transactions.
    - **Inventory**: stock movements and valuation.
    - **People**: timesheets, payroll.
-   - **Treasury**: bank, settlements, advances, payment orders, cash forecast. Accounting sold alone also needs bank and settlement records (D6).
-   - **FP&A**: plans, scenarios, budget control.
-   - **Accounting**: ledger, posting rules, VAT, AR/AP subledger, close.
+   - **Projects**: project structure, budgets, milestones, progress, acceptance.
+   - **Treasury**: bank, settlement of every open item (including expense claims and cards), advances, payment orders, cash forecast.
+   - **FP&A**: company plans, scenarios, budget control.
+   - **Accounting**: chart of accounts and account determination, ledger, posting, VAT and tax, AR/AP subledger, close. Also the source documents it captures itself when their owning product is not installed.
 3. **Derived:** the position projection (all money figures), period-close snapshots, and the reconciliation to the ledger.
 
-**Decisions for Hleb:**
+**Rulings (2026-09-24):**
 
-| # | Decision | Options and consequences |
+| # | Ruling | Where it lands |
 | --- | --- | --- |
-| F1 | Projection storage | **View:** zero drift, slower at scale. **Stored per source:** fast, needs a CI equality test. |
-| F2 | VAT in cash | **Gross + company VAT flow:** matches the bank. **Net + non-deductible (SAP):** simpler, bank timing is off. |
-| F3 | Remaining plan | **Automatic:** hides underruns and revenue loss. **Mandatory forecast-to-complete:** accurate, needs discipline. **Both:** more UI. |
-| F4 | Books kept externally | **Documents:** full lineage. **Imported ledger:** coarse. **Both, de-duplicated by reference:** more matching. |
-| F5 | Labour actual date | **Payroll period end:** reconciles. **Work date:** closer to operations. |
-| F6 | Revenue actual | **Invoiced:** simple. **Recognised (percentage of completion):** needs Accounting revenue rules. |
-| F7 | Scenario storage | **Full copies:** simple. **Deltas:** compact, harder to query. |
-| F8 | Order amendments | **Reversal + new revision:** full history. **Difference entry:** fewer rows. |
-| F9 | Stale commitments | **Manual closure:** can overstate. **Auto-close after N days:** can drop real commitments. **Ageing prompts:** in between. |
-| F10 | Disputed received invoices in the ledger | **Post on approval (prototype):** clean reconciliation, later posting. **Post on registration with a dispute flag:** earlier liability, needs reversal if rejected. Czech law is silent (not found). |
-| F11 | E-invoice exchange | **ISDOC first:** Czech practice today. **Peppol / EN 16931 first:** needed for intra-EU B2B under ViDA from 1 July 2030; domestic only if the Czech Republic mandates it. **Both behind one boundary:** more work, least lock-in. |
-| F12 | Invoice response CA (conditionally accepted) | **Count at full value (prototype):** simple, may overstate until the credit note arrives. **Count at zero until the condition is resolved:** conservative, delays actuals. |
-| D1 | Projects | **A sellable product owning budgets and milestones:** new records. **A platform dimension:** cannot be sold alone. |
-| D2 | Spend (cards, reimbursements) | **Its own product:** needs its own record types, not writes into Procurement / Treasury records. **Inside Procurement and Treasury:** no standalone Spend. |
-| D3 | Chart of accounts | **Owned by Accounting (prototype):** keeps statutory separate. **Platform-shared:** one chart, blurrier boundary. |
-| D4 | More vendor research | **Oracle, Xero, Unit4, Acumatica, SAP Business One, Czech and EU SME tools (Pohoda, Money S3, ABRA, Helios):** answers the anchoring objection, costs time. **Stop here.** |
-| D5 | Expenses, Tax | **Own products:** new scope. **Folded into People, Procurement and Accounting.** |
-| D6 | Who owns invoices, contracts, bank and settlement records when Accounting is sold alone (the ledger posts from all of them) | **Shared Billing, Agreement and Settlement modules shipped with Accounting, Sales, Procurement and Treasury:** one owner each, not sold alone. **Accounting owns them, and the other products create them through it.** **Separate Billing and Treasury products that Accounting requires.** |
+| D1 | Projects is a sellable product with its own records. | Project identity stays on the platform so every product can tag it. Projects owns structure, budget, milestones and progress (6.1, 6.5). |
+| D2 | Spend is part of Procurement and Treasury. There is no Spend product. | 6.8 |
+| D3 | One chart connected to everything, owned by Accounting. | 6.6 |
+| D4 | Research more vendors. | 3.3 |
+| D5 | Expenses are not People. Tax is Accounting. | Expense claims and cards sit on the spend side (6.8). |
+| D6 | Accounting owns accounting, the spend side owns spend documents, Sales owns sales documents. The report solves the Accounting-alone case. | 6.8 (proposal, built and checked) |
+| F11 | Input is mixed; be strong on Peppol. | 7.7 |
+
+**Out of scope, as workflow rather than architecture:**
+
+- remaining plan
+- revenue timing
+- labour date
+- conditionally accepted and disputed invoices
+- stale commitments
+- VAT in cash
+- order amendments
+- books kept externally
+- projection and scenario storage
+
+The architecture only has to express each one as a product's stage or posting rule, without changing the stage contract. Where the prototype needed a rule, it uses a sample policy and names it where it appears.
 
 ---
 
@@ -721,6 +805,11 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 - management adjustments; period-close snapshots
 - plan spreading; the period-bounded opex check
 - stored-projection equality test; a suggestion store for inferred matches
+- Projects records: structure, milestones, progress, acceptance
+- expense claims and card transactions on the spend side
+- Accounting capturing bank statements, and settling the documents it captured
+- account determination as one function shared by posting and by record views
+- the intake layer: format mappings, OCR, keeping the originals
 
 **Simplifications:**
 
@@ -729,6 +818,8 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 - Rejected orders and over-advances leave the remainder as a forecast refund. There is no unapplied-advance record.
 - Whether a self-billed invoice should ever need our approval is open.
 - Payroll uses one cost account and one liability account.
+
+**Not reviewed again:** the fixes from the second critical review round (advance handling), and the Accounting-alone design in 6.8.
 
 **Not verified:**
 

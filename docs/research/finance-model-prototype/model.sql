@@ -196,7 +196,8 @@ create table supplier_invoice (
     due_on date not null,
     recorded_on date not null,
     requires_approval boolean not null default false,
-    self_billing_agreement_id text references agreement  -- set when we issued it on the supplier's behalf
+    self_billing_agreement_id text references agreement,  -- set when we issued it on the supplier's behalf
+    document_number text                    -- the supplier's own number (EN 16931 BT-1)
 );
 
 create table supplier_invoice_line (
@@ -366,6 +367,30 @@ create table journal_line (
     project_id text references project,
     debit numeric(14, 2) not null default 0,
     credit numeric(14, 2) not null default 0
+);
+
+-- A source document Accounting captures itself because no installed product owns it
+-- (e.g. Accounting sold alone). When the owning product is installed, that product
+-- registers the document and the journal entry points to it through source_type /
+-- source_id, so each external document has exactly one registering record.
+create table accounting_source_document (
+    id text primary key,
+    kind text not null check (kind in ('received_invoice', 'issued_invoice')),
+    counterparty_id text not null references counterparty,
+    document_number text not null,          -- the issuer's number (EN 16931 BT-1)
+    issued_on date not null,
+    due_on date not null,
+    recorded_on date not null,
+    unique (kind, counterparty_id, document_number)
+);
+
+create table accounting_source_document_line (
+    id text primary key,
+    accounting_source_document_id text not null references accounting_source_document,
+    project_id text references project,
+    category_id text not null references category,
+    amount_net numeric(14, 2) not null,
+    vat_amount numeric(14, 2) not null
 );
 
 -- ---------------------------------------------------------------------------
@@ -774,6 +799,24 @@ join supplier_invoice_approval a on a.supplier_invoice_id = aa.supplier_invoice_
 join purchase_order_line pol on pol.id = s.line_id
 join purchase_order po on po.id = pol.purchase_order_id;
 
+-- Accounting: source documents it captured itself. Actual on the document date,
+-- open cash until paid (settling them is described, not built).
+create view position_accounting as
+select case d.kind when 'issued_invoice' then 'revenue' else 'cost' end as family, 'actual' as stage,
+       l.project_id, l.category_id, l.amount_net as amount, 1.00 as probability,
+       d.issued_on as effective_on, d.recorded_on, null::date as cash_on,
+       'accounting_source_document_line' as source_type, l.id as source_id
+from accounting_source_document_line l
+join accounting_source_document d on d.id = l.accounting_source_document_id
+
+union all
+select 'cash', 'open', l.project_id, l.category_id,
+       case d.kind when 'issued_invoice' then 1 else -1 end * (l.amount_net + l.vat_amount), 1.00,
+       d.issued_on, d.recorded_on, d.due_on,
+       'accounting_source_document_line', l.id
+from accounting_source_document_line l
+join accounting_source_document d on d.id = l.accounting_source_document_id;
+
 -- The platform unions the views of the installed products.
 create view position_entry as
 select family, stage, project_id, category_id, round(amount, 2)::numeric(14, 2) as amount,
@@ -785,6 +828,7 @@ from (
     union all select * from position_inventory
     union all select * from position_people
     union all select * from position_treasury
+    union all select * from position_accounting
 ) installed;
 
 -- Bitemporal read: what was valid on `valid_on`, as the system knew it on `known_on`.
