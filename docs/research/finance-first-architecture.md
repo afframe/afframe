@@ -15,6 +15,7 @@ What comes with this report:
 | documented | official vendor or standard documentation |
 | official | law or EU/Czech state source |
 | source | public source code |
+| search-derived | a search-engine summary of a vendor page that was not fetched verbatim |
 | marketing | vendor marketing material |
 | third-party | a non-vendor secondary source |
 | inferred | this report's own reasoning |
@@ -42,7 +43,7 @@ The model has eight parts:
    - A cash relief keeps the **predecessor's cash date**.
 5. **A derived, bitemporal position projection.**
    - Each domain contributes one view of rules for its record types. The platform unions them. A view only returns rows for records that exist, so selling fewer products means fewer rows, never different rules.
-   - Every entry carries `effective_on` (when it happened) and `recorded_on` (when we learned it).
+   - Every entry carries `effective_on` (when it happened) and `recorded_on` (when we learned it), plus the counterparty and the root business document (order, contract or invoice), so per-supplier and per-order reports are one `GROUP BY` too. The prototype carries neither of the last two yet.
    - It has no writers.
 6. **A separate plan store, owned by FP&A:** company, cost-center, activity and project budgets, forecasts, scenarios and cash plans. Projects is a product over FP&A's project financial control and owns no records.
 7. **A separate statutory ledger**, posted from the same typed records. A reconciliation contract ties it to the projection.
@@ -50,7 +51,7 @@ The model has eight parts:
    - Sold alone, Accounting registers invoices and bank statements in the same records the Sales, Procurement and Treasury products use. Its journal entries point to those records.
 8. **Peppol / UBL / EN 16931 as the reference domain layer, not the internal schema.**
    - It supplies the missing business vocabulary: party roles, agreements, order and invoice responses, self-billing, prepayments, correction kinds and amount rules.
-   - It fixes the boundary for exchanging documents with other companies. One intake layer takes mixed input (Peppol, ISDOC, PDF and scans) and maps every format to EN 16931 semantics, then to the owning product's typed record. EN 16931 e-invoices become the default for intra-EU B2B under ViDA from 1 July 2030. Domestic e-invoicing becomes mandatory only if the Czech Republic mandates it; no plan was found.
+   - It fixes the boundary for exchanging documents with other companies. One intake layer takes mixed input (Peppol, ISDOC, PDF and scans) and maps every format to EN 16931 semantics, then to the owning domain's typed record. From 1 July 2030 ViDA makes EN 16931 e-invoices the default for all invoices, and the recipient may no longer refuse them (new Art. 232). Member States may still accept other formats outside the reporting obligations; no Czech domestic mandate was found.
 
 **What separates this from the two rejected designs:**
 
@@ -104,12 +105,12 @@ Full quotes are in [`finance-first-evidence/`](finance-first-evidence/).
 | SAP | **Commitments only cover recent documents.** They are processed only for documents created after activation; older ones "aren't supported". *Inferred:* the stored deltas are not rebuilt from history. | documented + inferred | as row 1 |
 | SAP | **One Exposure (cash forecast).** Requisitions and orders lead to "forecasted cash that is adjusted by subsequent invoicing processes". It uses net plus non-deductible tax, and flows can be rebuilt. | documented | [One Exposure MM](https://help.sap.com/docs/SAP_S4HANA_CLOUD/186460fdc35a4b64a713da9bb00deb1e/27fbca0f32da40d39bb66ef161008d27.html?locale=en-US) |
 | SAP | **Predictions and plan data.** Sales orders create predictive entries, which actual postings reduce. Plan data sits in ACDOCP, "single source of truth for plan data". | documented | [Predictive Accounting](https://help.sap.com/docs/SAP_S4HANA_CLOUD/0fa84c9d9c634132b7c4abb9ffdd8f06/c78ce92ab96346f7ab2722b79756ffc1.html?locale=en-US), [Planning](https://help.sap.com/docs/SAP_S4HANA_CLOUD/1cbcff7ccd35405ab445b223c1ab1588/f900a12c7abf4c91957478cd6f6e48e8.html?locale=en-US) |
-| Dynamics 365 Finance | **Budget remaining** = budget − actuals − encumbrances − pre-encumbrances. These are tracked in `BudgetSourceTracking`. Encumbrances "aren't documents"; general budget reservations are. | documented | [Budget analysis report](https://learn.microsoft.com/en-us/dynamics365/finance/public-sector/budget-analysis-report), [Budget control](https://learn.microsoft.com/en-us/dynamics365/finance/budgeting/budget-control-overview-configuration) |
+| Dynamics 365 Finance | **Budget remaining** = budget − actuals − encumbrances − pre-encumbrances. These are tracked in `BudgetSourceTracking`. Private-sector budget reservations (encumbrances) "aren't documents", unlike general budget reservations. | documented | [Budget analysis report](https://learn.microsoft.com/en-us/dynamics365/finance/public-sector/budget-analysis-report), [Budget control](https://learn.microsoft.com/en-us/dynamics365/finance/budgeting/budget-control-overview-configuration), [General budget reservations](https://learn.microsoft.com/en-us/dynamics365/finance/public-sector/general-budget-reservations) |
 | Dynamics 365 | **Cash flow forecasting** reads orders "not yet invoiced" and open AR/AP. It warns that project forecasts transferred to budgets would be "counted two times". | documented | [Cash flow forecasting](https://learn.microsoft.com/en-us/dynamics365/finance/cash-bank-management/cash-flow-forecasting) |
-| NetSuite | **One transaction record family.** Posting and non-posting transactions share Transaction / TransactionLine / TransactionAccountingLine. Line links are confirmed by third parties only. | documented / third-party | [Join path](https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_1548805090.html) |
+| NetSuite | **One transaction record family.** Transactions share Transaction / TransactionLine / TransactionAccountingLine (documented). That posting and non-posting transactions share it, and the line links, are confirmed by third parties only. | documented / third-party | [Join path](https://docs.oracle.com/en/cloud/saas/netsuite/ns-online-help/section_1548805090.html) |
 | Odoo 18 | **Timesheets and profitability.** Timesheets are analytic lines, `amount = -unit_amount * hourly_cost`. The profitability panel is built by per-module `_get_profitability_items`. Budget "Committed" = achieved + unbilled orders (Enterprise). | source + documented | `hr_timesheet.py`, `sale_project/models/project_project.py`, [Budgets](https://www.odoo.com/documentation/18.0/applications/finance/accounting/reporting/budget.html) |
-| ERPNext v15 | **Budget check computed on read.** Open request quantity × rate; order `amount - billed_amt`, where `billed_amt` sums **invoice** amounts. The open order remainder is therefore understated when prices change. | source | `budget.py`, `purchase_invoice.py` |
-| Tryton | **Corrections and budgets.** Posted moves are read-only, and cancel creates a negated copy. The budget compares only posted lines, with no commitment stage. A purchase request's state is derived. | source | `account/move.py`, `account_budget/account.py` |
+| ERPNext v15 | **Budget check computed on read.** Open request quantity × rate; order `amount - billed_amt`, where `billed_amt` sums **invoice** amounts. The open order remainder is therefore misstated (under or over) whenever the invoice price differs from the order price. | source | `budget.py`, `purchase_invoice.py` |
+| Tryton | **Corrections and budgets.** Posted moves are read-only, and cancel creates a negated copy. The budget compares the period's move lines; posted-only is an optional filter; no commitment stage was found. A purchase request's state is derived. | source | `account/move.py`, `account_budget/account.py` |
 | ERP5 | **Generic simulation.** A generic movement and simulation model with divergence testers and solvers (Accept, Adopt, Quantity Split…). Balances are sums of movements. | documented + source | [ERP5 developer](https://www.erp5.com/basic/developer) |
 | Anaplan | **Versions.** Versions are a dimension. Before a forecast version's switchover date, data "is the same as for Actual and is read-only". | documented | [Versions](https://help.anaplan.com/versions-19b4391f-5257-40ee-8dfb-36f0ab426c8f) |
 | Procore | **Forecast formulas.** Projected Costs = Committed + Direct + Pending changes; Forecast to Complete = Projected Budget − Projected Costs. | documented | [Read a budget](https://support.procore.com/products/online/user-guide/project-level/budget/tutorials/read-a-budget) |
@@ -126,18 +127,18 @@ Details are in `peppol-ordering-ubl.md`, `peppol-billing-en16931.md` and `cz-ein
 | Advanced ordering | Order Change comes from the buyer only. Either party may cancel. A seller proposes changes through Order Response Advanced. | documented (paraphrase level) | [Advanced Ordering](https://docs.peppol.eu/poacc/upgrade-3/profiles/65-advanced-ordering/) |
 | Order agreement | "The seller creates an order in his ordering system … and sends a copy of the order as an Order agreement to the buyer". This covers purchases made outside the buyer's process. | documented | [Order Agreement](https://docs.peppol.eu/poacc/upgrade-3/profiles/42-orderagreement/) |
 | Despatch advice | "The Despatch Advice states what is shipped; the quantity of goods shipped and what is outstanding" (e.g. backorder). | documented | [Despatch Advice](https://docs.peppol.eu/poacc/upgrade-3/profiles/30-despatchadvice/) |
-| Invoice types | Billing 3.0 allows 380 plus alternatives, including 383 (debit note), 384 (corrected), 386 (prepayment) and 389 (self-billed). Credit notes use 381, 81, 83, 396 and 532. | documented | [UNCL1001-inv](https://docs.peppol.eu/poacc/billing/3.0/codelist/UNCL1001-inv/) |
+| Invoice types | Billing 3.0 allows 380 plus alternatives, including 383 (debit note) and 386 (prepayment). 384 (corrected invoice, a full replacement) and 389 are marked "Germany only" in Billing 3.0; self-billing codes 389, 527 and 261 belong to Self-Billing 3.0. Credit notes use 381, 81, 83, 396 and 532. | documented | [UNCL1001-inv](https://docs.peppol.eu/poacc/billing/3.0/codelist/UNCL1001-inv/) |
 | Invoice references | Project BT-11, contract BT-12, order BT-13, receiving advice BT-15, despatch advice BT-16, invoiced object BT-18, buyer accounting reference BT-19, preceding invoice BT-25. | documented | [Billing 3.0](https://docs.peppol.eu/poacc/billing/3.0/bis/) |
-| Self-billing | "A customer issues and sends an invoice in its suppliers name". Codes: 389 (invoice), 527 (debit note), 261 (credit note). The Peppol text found does not require a written agreement; that requirement comes from Czech VAT law § 28 (see below). | documented | [Self-billing 3.0](https://docs.peppol.eu/poacc/self-billing/3.0/bis-sb/) |
-| Invoice response codes | AB, IP, UQ, CA, RE, AP, PD. "Several Invoice Response's can be sent for one invoice". After Rejected or Paid, "no further Invoice Response may be sent". Approved "may only be followed with … Paid". | documented | [UNCL4343-T111](https://docs.peppol.eu/poacc/upgrade-3/codelist/UNCL4343-T111/), [Invoice Response](https://docs.peppol.eu/poacc/upgrade-3/profiles/63-invoiceresponse/) |
+| Self-billing | "A customer issues and sends an invoice in its suppliers name". Codes: 389 (invoice), 527 (debit note), 261 (credit note). Peppol cites VAT Directive Art. 224: "prior agreement and a procedure where the supplier is to accept each invoice". | documented | [Self-billing 3.0](https://docs.peppol.eu/poacc/self-billing/3.0/bis-sb/) |
+| Invoice response codes | AB, IP, UQ, CA, RE, AP, PD. "Several Invoice Response's can be sent for one invoice". After Rejected or Paid, "no further Invoice Response may be sent". Approved "may only be followed with … Paid". OP-BR111-R012: "The status of invoices shall advance in the following order" AB, IP, UQ, CA, RE, AP, PD; the process may start at any status. | documented | [UNCL4343-T111](https://docs.peppol.eu/poacc/upgrade-3/codelist/UNCL4343-T111/), [Invoice Response](https://docs.peppol.eu/poacc/upgrade-3/profiles/63-invoiceresponse/) |
 | Amount rules | BR-CO-10: sum of lines. BR-CO-13: total without VAT = lines − allowances + charges. BR-CO-15: + VAT. BR-CO-16: amount due = total with VAT − paid amount (BT-113) + rounding (BT-114). | documented | [BR-CO-16](https://docs.peppol.eu/poacc/billing/3.0/rules/ubl-tc434/BR-CO-16/) |
 | Remittance advice | UBL has a RemittanceAdvice document. No Peppol profile was found for it. | documented / not found | `peppol-billing-en16931.md` |
 | EN 16931-1 | "A new version of the EN 16931-1, a version 2026, was published in May 2026 and consequently the 2017 version … has been formally withdrawn". The 2017 version remains compliant during the migration period. Peppol BIS Billing 3.0 is still built on the 2017 model; no Peppol migration date was found. | official | [EC eInvoicing](https://ec.europa.eu/digital-building-blocks/sites/spaces/DIGITAL/pages/467108971/Obtaining+a+copy+of+the+European+standard+on+eInvoicing) |
 | ViDA, Directive (EU) 2025/516 | Article 5 applies from 1 July 2030 and replaces VAT Directive Art. 218: "invoices shall be issued as electronic invoices" complying with the European standard. Member States may still accept other formats for transactions outside the reporting obligations, and may mandate domestic e-invoicing. | official | [OJ L 2025/516](https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ:L_202500516) |
-| Czech public sector | Act 134/2016 § 279(5): contracting authorities must accept EN 16931 e-invoices (from 2019 or 2020 depending on the authority). Accepted syntaxes: UBL 2.1, CII, ISDOC ≥ 5.2. | official (summarised, re-check wording) | [mf.gov.cz](https://mf.gov.cz/cs/dane-a-ucetnictvi/elektronicka-fakturace/zakladni-informace) |
-| ISDOC | The Czech national e-invoice format, widely used between Czech accounting systems. Its current version and maintainer were not settled. No Czech Peppol Authority was found. | third-party / partly | `cz-einvoicing-vat.md` |
+| Czech public sector | Act 134/2016 § 221 (effective through § 279(5)): contracting authorities "nesmí odmítnout elektronickou fakturu" that follows the European standard, in UBL 2.1 or CII (from 2019 or 2020 depending on the authority). Separately, Government Resolution 347/2017 makes central state bodies accept ISDOC ≥ 5.2. | official | [mf.gov.cz](https://mf.gov.cz/cs/dane-a-ucetnictvi/elektronicka-fakturace/zakladni-informace), [zakonyprolidi.cz](https://www.zakonyprolidi.cz/cs/2016-134) |
+| ISDOC | The Czech national e-invoice format, widely used between Czech accounting systems. Current version 6.0.2 (23 March 2022), maintained by the Ministry of the Interior. It is not one of the EN 16931 syntaxes. No Czech Peppol Authority was found. | documented | [isdoc.cz/6.0.2](https://isdoc.cz/6.0.2/) |
 | Czech VAT advances | § 20a: "Je-li před uskutečněním zdanitelného plnění přijata úplata, vzniká povinnost přiznat daň … ke dni jejího přijetí" (VAT becomes due on the day an advance is received): official. A proforma (zálohová faktura) is not a tax document: third-party. That an advance creates no tax point under reverse charge is third-party only and needs checking against the law text. | official + third-party | `cz-einvoicing-vat.md` |
-| Czech self-billing | § 28: the supplier may authorise the customer in writing to issue the tax document. Whether this is allowed for reverse-charge supplies was **not found**, so the example self-bills a standard-VAT supply. | third-party (re-check law text) | `cz-einvoicing-vat.md` |
+| Czech self-billing | § 28(10): another person may issue the tax document "na základě jejich ujednání" (on the basis of their arrangement), which the tax office may ask to be proven; no written form is required. § 29(2)(b) marks the document "vystaveno zákazníkem". Whether self-billing is used with reverse-charge supplies was **not found**, so the example self-bills a standard-VAT supply. | official | [zakonyprolidi.cz](https://www.zakonyprolidi.cz/cs/2004-235) |
 | Disputed received invoices | No Czech rule on booking a disputed received invoice was found in Act 563/1991 or the VAT Act. | not found | `cz-einvoicing-vat.md` |
 
 **Patterns:**
@@ -160,8 +161,8 @@ Unit4's primary documentation was unreachable, so its row rests on marketing and
 
 | Vendor | Who owns invoices and bank | Chart of accounts | Projects | Expenses | Inbound e-invoices | Label |
 | --- | --- | --- | --- | --- | --- | --- |
-| Oracle Fusion | Payables and Receivables own invoices; Subledger Accounting derives the journal. No GL-only edition found. | The ledger sets the chart for its subledgers. | PPM, a separate pillar | Expenses, processed through Payables (source) | Peppol BIS 3.0 in and out; separate subsystems per channel (source) | documented / source |
-| Unit4 ERPx | AP and AR modules, integrated with GL | configurable; mapping not found | Project Management module (budgets, time and expense) | not found | eConnect: Peppol, and PDF via OCR into structured XML, keeping the PDF | source |
+| Oracle Fusion | Payables and Receivables own invoices; Subledger Accounting derives the journal. No GL-only edition found. | The ledger sets the chart for its subledgers. | PPM, a separate pillar (search-derived) | Expenses, processed through Payables (search-derived) | Peppol BIS 3.0 in and out; separate subsystems per channel (search-derived) | documented / search-derived |
+| Unit4 ERPx | AP and AR modules, integrated with GL | configurable; mapping not found | Project Management module (budgets, time and expense) | not found | eConnect: Peppol, and PDF via OCR into structured XML, keeping the PDF | marketing / third-party |
 | Acumatica | GL, AP, AR, cash and tax sold as one Financials module; GL alone is not sold | GL owns the chart; AP and PO lines default the account from the vendor or item | Project Accounting, a separate module | Advanced Expense Management (claims, corporate cards) | ML/OCR document recognition into AP bills | documented / inferred |
 | Xero | The accounting core owns invoices, bills and bank transactions outright. Projects and Expenses link to or create those core records. | One chart in the core; tracking categories are a separate dimension; apps map to the chart when they connect. | Xero Projects, an add-on: tasks, time, budgets, no ledger records of its own | Xero Expenses, an add-on: an approved claim becomes a bill (not re-quoted verbatim) | Hubdoc and apps all create the same core records | documented / partly |
 | SAP Business One | Sales and Purchasing documents own A/R and A/P invoices and generate linked journal entries. One license, not separate products. | Financials owns the chart; G/L account determination maps other modules to it. | Project Management module | not found | not found; partner add-ons | inferred / third-party |
@@ -173,13 +174,13 @@ Unit4's primary documentation was unreachable, so its row rests on marketing and
 **What this shows for Afframe's rulings:**
 
 - **Invoices and bank when Accounting is sold alone.** Three patterns exist:
-  - Accounting owns invoices outright, and other products create them through it: Xero, and in effect the Czech tools, whose accounting product contains the invoice agendas.
+  - Accounting owns invoices outright, and other products create them through it: Xero, and POHODA, whose accounting product contains the invoice agendas. Money, ABRA and Helios sell invoicing and accounting as modules of one suite, with the journal fed from the invoice records.
   - Business modules own invoices, and accounting derives the journal: Oracle and SAP Business One.
   - The two are sold together, so accounting never runs alone: Acumatica.
 
   None of the examined products was found to sell a ledger alone while leaving invoices to separately sold products. For Oracle and Unit4, this rests on NOT FOUND. Section 6.8 follows the first pattern, with one change: the invoice belongs to its business domain rather than to Accounting, and Accounting sold alone ships the features to register it.
-- **Chart of accounts.** Every vendor has one chart owned by the ledger, mapped to other records by rules: account determination, předkontace, kontace, item and vendor defaults. ABRA Flexi shows the account from each document. This supports the ruling in 6.6.
-- **Projects.** Oracle, Unit4, Acumatica, Xero and Helios sell projects separately. POHODA and ABRA treat them as a tagging dimension. Xero Projects owns tasks, time and budgets but no ledger records. That matches ruling D1 with the project identity kept on the platform.
+- **Chart of accounts.** Every vendor where it was found (not Unit4) has one chart owned by the ledger, mapped to other records by rules: account determination, předkontace, kontace, item and vendor defaults. ABRA Flexi shows the account from each document. This supports the ruling in 6.6.
+- **Projects.** Oracle (search-derived), Acumatica, Xero and Helios (a separately priced Zakázky module) sell projects separately; for Unit4 it was not found. POHODA and ABRA treat them as a tagging dimension. Xero Projects owns tasks, time and budgets but no ledger records. That matches ruling D1 with the project identity kept on the platform.
 - **Expenses.** Oracle, Xero and Acumatica put claims and cards on the finance or payables side. Money and Helios tie travel expenses to payroll. Hleb's ruling puts them on the spend side.
 - **E-invoice intake.** Xero converges every source on one set of core records. The Czech tools have one import path per format, ISDOC first. None of them documents EN 16931 as the pivot model. Section 7.7's single intake layer with EN 16931 semantics is a design choice, not an observed pattern.
 
@@ -218,26 +219,35 @@ Evidence: [`module-evidence/`](module-evidence/), one file per group, each claim
 
 ## 4. The alternatives
 
-1. **Generic documents plus a statutory GL** (NetSuite-like). One table, no common meaning. The meaning of each link type is still coded per report. Per-type validation gets weaker.
-2. **A common writable exposure or movement model** (writable `financial_effects`, SAP 0E, ERP5).
-   - Right output, wrong ownership: the truth lives twice, and each writer must relieve correctly.
-   - SAP shows that capture only starts at activation.
-   - Plans in the same table invite double counting.
+1. **Generic documents plus a statutory GL** (NetSuite-like). One document table with line links; the ledger is posted from it.
+2. **A common writable exposure or movement model** (writable `financial_effects`, SAP 0E, ERP5). The strongest version: every module writes effects through one shared rule library, changes are obsolete + reversal + new (SAP), divergences are resolved by solvers (ERP5), and flows can be rebuilt (SAP One Exposure).
 3. **Typed records + links + derived positions.**
-   - Derived **per report**: this is the rejected join approach. ERPNext's per-check valuation shows why.
-   - Derived **once, into a stage contract**: this is the recommendation.
-4. **Planning cube beside actuals** (Anaplan-like). Needed for FP&A, blind to documents. Adopted as the plan store.
+   - Derived **per report**: the rejected join approach. ERPNext's per-check valuation shows why.
+   - Derived **once, into a stage contract**: the recommendation.
+4. **Planning cube beside actuals** (Anaplan-like).
 5. **Peppol as the internal core.** Rejected by Hleb (line 4824) and by the evidence: Peppol has no commitments, budgets, payroll, ledger derivation, bank reconciliation or planning.
 6. **Hybrid (recommended).** The eight parts in section 1.
 
-**Stress tests: alternative 2 (writable effects) vs 3a (joins per report) vs 6 (hybrid, as built in the prototype)**
+A variant of 1 deserves a note: **multi-book** (NetSuite) keeps a statutory and a management book over the same transactions. It separates two accounting views of *posted* facts; it does not give requests, orders, time or plans a place, so it answers R3 only for actuals.
+
+**The brief's four questions per alternative** (cells for 1, 2, 3a and 4 are this report's inference from the evidence in 3.1):
+
+| Question | 1 Generic documents + GL | 2 Writable effects (steelman) | 3a Joins per report | 4 Planning cube | 6 Hybrid |
+| --- | --- | --- | --- | --- | --- |
+| Where the truth lives | one generic document table; meaning per type in code | typed records **and** the effects table: the truth lives twice | typed records | the cube for plans; actuals imported | typed records only; plans in the plan store |
+| How an estimate is replaced or partly fulfilled | per report or per posting rule | each writer writes a relief effect through the shared library | each report recomputes it | not modelled; actuals overwrite the forecast cells | one relief rule over quantity links, derived |
+| How users correct mistakes | reverse the document | obsolete + reversal + new effect rows (SAP) | edit the record; reports follow | edit the cell | reverse or correct the record; the projection follows |
+| Reports aggregate common dimensions without custom logic | no, link meaning is coded per report | yes | no, per dashboard | yes, for what is in the cube | yes: one `GROUP BY` shape |
+| Main risk | weak per-type validation | drift if one writer relieves wrongly; history before activation (SAP 0E) unless rebuilt | the same number computed differently per report | blind to documents and commitments | read cost at scale (6.9) |
+
+**Stress tests: alternative 2 vs 3a vs 6** (cells for 2 and 3a are inferred; 6 is built in the prototype)
 
 | Case | 2 Writable effects | 3a Joins per report | 6 Hybrid (prototype) |
 | --- | --- | --- | --- |
 | Request → several orders, partial deliveries | each writer relieves | per report | 10 frames → orders for 6 and 2, 1 from stock, 1 open at the 30,000 estimate |
-| Changed price (order ≠ estimate, invoice ≠ order, corrective invoice) | each writer | ERPNext understates the remainder | relief at the predecessor price; variance lands in `actual` (VB3 +1,000, VB2C +2,000) |
-| Supplier accepts less, at a new price | not handled | not handled | PO5 50 × 1,000 → accepted 40 × 1,050: committed 50,000 → 42,000 |
-| Invoice disputed or rejected | effect already written | per report | VB3 counts only from acceptance; the rejected duplicate VB6 never counts |
+| Changed price (order ≠ estimate, invoice ≠ order, corrective invoice) | each writer | ERPNext misstates the remainder | relief at the predecessor price; variance lands in `actual` (VB3 +1,000, VB2C +2,000) |
+| Supplier accepts less, at a new price | obsolete + reversal + new (SAP); divergence solver (ERP5) | per report | PO5 50 × 1,000 → accepted 40 × 1,050: committed 50,000 → 42,000 |
+| Invoice disputed or rejected | the writer waits for acceptance, or writes and reverses | per report | VB3 counts only from acceptance; the rejected duplicate VB6 never counts |
 | Advance before delivery | two writers | per report | PO5 advance of 25,410 keeps the order's cash exposure at 50,820 throughout |
 | Self-billing | n/a | n/a | VB5 issued by us under a self-billing agreement; stages unchanged |
 | Services without receipt | each writer | per report | the invoice relieves `committed` |
@@ -245,14 +255,16 @@ Evidence: [`module-evidence/`](module-evidence/), one file per group, each claim
 | Stock | natural | per report | replenishment is not project cost; stock issue at valuation |
 | Split payments, payroll in 2 transfers | works | works | rounding to the cent; relief once per allocation |
 | Timesheet → payroll | payroll writes a true-up | not found | incurred at 500/h, actual at 550 and 530/h |
-| Scenarios | double-count risk | per report | the plan remainder only |
-| As reported then | if append-only | rebuilt per report | `effective_on` × `recorded_on` |
+| Scenarios | double-count risk if plans share the table | per report | the plan remainder only |
+| As reported then | if append-only | rebuilt per report | `effective_on` × `recorded_on`, provided every rule input (rates, probabilities, response terms) is insert-only or versioned |
 
 ---
 
 ## 5. Challenge to the common-framework preference
 
-One writable object or one engine is not supported by any mechanism that works in the products examined. What the shared layer adds beyond conformed dimensions and typed facts:
+The evidence does not forbid one writable object: SAP 0E works, and the steelman alternative 2 produces the same numbers as the hybrid when every writer relieves correctly. What it costs is that the truth lives twice, and every writer is responsible for relief. The real choice is between deriving effects on read and storing them regenerated from the same rule library (6.9); the hybrid starts with the first and keeps the second open.
+
+What the shared layer adds beyond conformed dimensions and typed facts:
 
 - **One relief rule.** SAP and ERPNext produce different numbers from the same documents because they relieve differently.
 - **One stage vocabulary.**
@@ -273,7 +285,7 @@ Owners are business domains, not products. A product is a sellable set of featur
 | Part | Owner | Prototype |
 | --- | --- | --- |
 | Identities, roles | Platform (project identity included) | `project`, `category`, `counterparty`, `employee` |
-| Agreements (contracts, framework, self-billing) | Sales (customer side), Procurement (supplier side, self-billing) | `agreement` |
+| Agreements (contracts, framework, self-billing) | Sales domain (customer side), spend domain (supplier side, self-billing) | `agreement` (the prototype has no side column, so only self-billing rows can be attributed) |
 | Typed records: CRM | CRM | `opportunity`, `opportunity_outcome` |
 | Typed records: Sales | Sales domain | `sales_order_line`, `customer_invoice_line` |
 | Typed records: spend | Spend domain (also expense claims and card transactions: not built) | `material_request_line`, `purchase_order_line`, `order_response(_line)`, `goods_receipt_line`, `supplier_invoice_line`, `invoice_response` |
@@ -351,7 +363,8 @@ The correction kinds follow the Peppol paper's taxonomy.
 | Order change (buyer) or accepted change (seller) | order response / order change | committed re-valued to the new accepted terms | PO5 via CA response |
 | Order cancellation | cancellation or closure | remaining committed relieved | described |
 | Return after acceptance | negative receipt | incurred back to committed, or cancelled | described |
-| Credit note / debit note / corrective invoice (381, 383, 384) | new invoice document linked to the original | actual ± difference | VB2C +2,000 |
+| Credit note / debit note / Czech corrective tax document (381, 383; ISDOC 2, 3) | new invoice document linked to the original | actual ± difference | VB2C +2,000 |
+| Corrected invoice 384 (full replacement) | reversal of the original + the replacement document | actual replaced | described |
 | Posted operational record wrong | reversal + new record | automatic | TS6 → TS6R + TS7 |
 | Accounting reversal | new journal entry | ledger only | `post_to_ledger` inserts only |
 | Settlement reversal / reapplication | reversal allocation | open ↔ settled | described |
@@ -359,7 +372,7 @@ The correction kinds follow the Peppol paper's taxonomy.
 | Correction into a closed period | reversal dated in the first open period | aligned with the ledger | described |
 | Projection rule wrong | fix the rule and regenerate; published figures come from period-close snapshots | none | described |
 
-**Czech law.** Act 563/1991 § 35(3), in force in 2026, requires the person, the moment, and the content before and after a correction to be determinable. A new Accounting Act takes effect no earlier than 1 January 2027 ([MF ČR](https://mf.gov.cz/cs/dane-a-ucetnictvi/ucetnictvi/nova-ucetni-legislativa-soukromeho-a-verejneho-sek/casto-kladene-dotazy-k-nove-ucetni-legislative/faq-k-ucetnictvi-soukromeho-a-verejneho-sektoru)).
+**Czech law.** Act 563/1991 § 35(3), in force in 2026, requires the person, the moment, and the content before and after a correction to be determinable, and § 11(1)(f) requires a signature record of the responsible person. The architecture therefore records `recorded_on` as a timestamp and the actor (a person, or the system plus the approving person) on every record, response, reversal and journal entry. The prototype uses dates and no actor. A new Accounting Act takes effect no earlier than 1 January 2027 ([MF ČR](https://mf.gov.cz/cs/dane-a-ucetnictvi/ucetnictvi/nova-ucetni-legislativa-soukromeho-a-verejneho-sek/casto-kladene-dotazy-k-nove-ucetni-legislative/faq-k-ucetnictvi-soukromeho-a-verejneho-sektoru)).
 
 ### 6.5 Plans, forecasts, scenarios
 
@@ -403,7 +416,7 @@ The correction kinds follow the Peppol paper's taxonomy.
 | **Reverse charge** (§ 92e), CZ-CPA 41 to 43 between VAT payers | verified. Both directions in the example: our fit-out sales carry no VAT; the subcontractor invoice VB4 carries no VAT, and we self-assess 18,900 and deduct it in the same entry. |
 | **Deduction** (§§ 72, 73): from the period in which the tax document is held | VB1, dated 31 March and received 3 April, belongs to the April return. A separate VAT claim date is needed; it is not in the prototype. |
 | **Advances** (§ 20a): VAT is due when an advance is received (official). The proforma is not a tax document, and there is no tax point under reverse charge (both third-party only). | the prototype models the advance's cash and ledger effect, not its VAT timing |
-| **Self-billing** (§ 28): written authorisation required (third-party source; re-check the law text). This is a Czech rule, not a Peppol one. | modelled as an `agreement` of kind `self_billing` and checked. Not used for reverse-charge supplies because that combination was not verified. |
+| **Self-billing** (§ 28(10)): an arrangement (ujednání) that must be provable on request, no written form required (official). VAT Directive Art. 224 also requires a procedure where the supplier accepts each self-billed invoice; the architecture expresses that as the supplier's response on the self-billed invoice (not built). | modelled as an `agreement` of kind `self_billing` and checked. Not used for reverse-charge supplies because that combination was not verified. |
 | **Model conventions** | cost and revenue are net + non-deductible VAT; cash is gross; deductible VAT is company-level. SAP's net cash is an alternative policy. |
 
 ### 6.8 Sellability
@@ -477,7 +490,7 @@ The domain groups come from the Peppol paper; the owners are this report's propo
 | Identity and governance: parties, roles, periods, currencies, audit, validation profiles | Platform | parties, agreement kinds | party roles, EN 16931 rules |
 | Market and sourcing: opportunities, RFQ, quotations | CRM (sell side), Procurement (buy side) | opportunities | UBL RFQ/Quotation; pre-award is outside Peppol post-award |
 | Catalogue and offering | Platform reference data | item text only | Catalogue 3.1 with response |
-| Agreement: contracts, framework, call-offs, self-billing | Sales (customer side), Procurement (supplier side) | self-billing agreement | Order Agreement 3.0, Self-billing 3.0 |
+| Agreement: contracts, framework, call-offs, self-billing | Sales domain (customer side), spend domain (supplier side) | self-billing agreement | Order Agreement 3.0, Self-billing 3.0 |
 | Ordering: orders, responses, changes, cancellations | Sales, Procurement | order + CA response | Ordering 3.3, Advanced Ordering 3.0 |
 | Operations: projects, work, milestones, acceptance | Sales (billing milestones), People (time), FP&A (project financial control); delivery management is out of scope | timesheets | weak in Peppol |
 | Fulfilment: despatch, receipt, rejects, returns | Inventory / Procurement | receipts | Despatch Advice 3.1; Receipt Advice in Logistics |
@@ -545,9 +558,12 @@ Transitive ancestry (e.g. invoice → contract through the order) is derived, ne
 | Invoice response AP / CA | the invoice counts from this moment: relief, actual, open, ledger | VB3 counts from 12 April |
 | Invoice response RE (terminal) | never counts; the supplier must issue a credit note if anything was posted | VB6 duplicate, no effect anywhere |
 | Invoice response PD | information only; payment facts come from the bank | allowed code |
-| Prepayment invoice 386 / paid amount BT-113 | advance paid → settled, and relieves the order forecast; the final invoice's open amount is reduced by the applied advance (BR-CO-16) | PO5: advance 25,410, VB7 50,820, balance 25,410 |
+| Invoice response ordering (OP-BR111-R012, R004, R005) | none; an exchange rule for outbound responses, separate from the internal counting policy | not enforced |
+| Prepayment invoice 386 / paid amount BT-113 | 386 is the advance request (Czech zálohová faktura, not a tax document). Advance paid → settled, and relieves the order forecast; the final invoice's open amount is reduced by the applied advance (BR-CO-16) | PO5: advance 25,410, VB7 50,820, balance 25,410 |
+| Czech tax document for a received payment (daňový doklad při přijetí platby, ISDOC type 5) | no EN 16931 type code; needs a national extension. A typed record on the Sales side (advances received) and the spend side (advances paid) that carries base and VAT per rate, feeds VAT but not cost or revenue `actual`, and is deducted per rate on the final invoice | described, not built |
 | Self-billed invoice 389 / credit note 261 | stages unchanged; issuer role and agreement required | VB5 |
-| Credit note 381, debit note 383, corrected invoice 384 | correction documents (6.4) | VB2C |
+| Credit note 381, debit note 383, Czech corrective tax document (opravný daňový doklad, ISDOC types 2 and 3) | difference documents (6.4) | VB2C |
+| Corrected invoice 384 (Germany only in Peppol) | a full replacement: reverse the original and register the replacement | described |
 | Remittance advice (UBL only) | explains a payment's split, i.e. input for `payment_allocation` | described |
 
 ### 7.6 EN 16931 rules applied internally
@@ -565,12 +581,13 @@ EN 16931-1 was revised in May 2026, and the 2017 version stays compliant during 
 
 ### 7.7 External boundary: ISDOC, Peppol, ViDA
 
-- **ISDOC** is the Czech national format in daily use between accounting systems. The Czech public sector must accept EN 16931 e-invoices in UBL 2.1, CII or ISDOC ≥ 5.2.
-- **ViDA.** From 1 July 2030, VAT Directive Art. 218 makes electronic invoices to the European standard the default. That covers intra-EU B2B reporting, and Member States may mandate domestic e-invoicing. No Czech domestic B2B mandate was found.
+- **ISDOC** 6.0.2 is the Czech national format in daily use between accounting systems. Contracting authorities must accept EN 16931 e-invoices in UBL 2.1 or CII (Act 134/2016 § 221); central state bodies also accept ISDOC ≥ 5.2 (Government Resolution 347/2017).
+- **ViDA.** From 1 July 2030, new VAT Directive Art. 218 makes electronic invoices to the European standard the default for all invoices; Member States may still accept other formats for transactions outside the reporting obligations. New Art. 232: EN 16931 invoices "shall not be subject to acceptance by the recipient", so the intake layer must accept them technically. No Czech domestic B2B mandate was found.
 - **Mixed input.** One intake layer handles every inbound source: Peppol (UBL, CII), ISDOC, other national XML, e-mailed PDF and scans.
-  - Each format maps to EN 16931 semantics (the BT business terms) at the boundary. From there it maps to the typed record of the owning domain, whichever products are sold.
+  - Each format maps to EN 16931 semantics (the BT business terms) **plus a declared Czech extension** at the boundary: document kind (including ISDOC types 1 to 7), taxed-advance deductions per rate with their reference, the reverse-charge commodity code, the source document's UUID and the channel. Simplified documents may be incomplete, with the missing terms marked. From there it maps to the typed record of the owning domain, whichever products are sold.
   - EN 16931 is the boundary vocabulary, not the internal schema (line 4824).
-  - The original file is kept as evidence. Each document is registered once (6.8).
+  - The original file is kept as evidence in the Documents domain. Each document is registered once (6.8).
+  - **Registration key.** Received documents: the issuer's legal-entity identifier (IČO or a foreign equivalent, not the VAT ID, which a VAT group shares) plus the document number normalised as the tax office does (case-folded, separators and leading zeros removed), with the original number stored verbatim for the control statement. A same-issuer, same-amount, same-date document with a different number form is a suspected duplicate for review, not a conflict. Issued documents: issuer plus number, so a customer that self-bills us can be registered. The prototype keys on counterparty plus raw number only.
   - Fields extracted from PDF or scans are inferred until a person or a rule confirms them. That needs the suggestion store listed as not built in 7.9.
   - Outbound runs the other way: typed record → EN 16931 semantics → Peppol or ISDOC.
 - **Rule.** Inbound and outbound documents map to and from typed records at the boundary. An inbound invoice creates a supplier invoice that still needs our acceptance (external validity ≠ internal approval). A Message Level Response (technical receipt) is not an Invoice Response (business decision).
@@ -583,7 +600,7 @@ These come from the ERP patterns in 3.1 and from the prototype, not from Peppol:
 
 | Invariant (paper) | Status here |
 | --- | --- |
-| Every business fact has one authoritative domain | built (6.1) |
+| Every business fact has one authoritative domain | designed (6.1); in the prototype `agreement` has no side column |
 | Accounting results are explainable through an approved source | built: journal `source_type`/`source_id`; invoices post when they count |
 | Posted accounting is not silently mutated | built (insert-only posting) |
 | A correction identifies what it corrects | built (`reverses_id`, `corrects_line_id`, response → order) |
@@ -789,7 +806,8 @@ P1 labour incurred in May: 7,000 as known on 27 May, 3,000 after the reversal on
 - cost centers (střediska)
 - activities (činnosti)
 - categories, items, periods, currencies
-- the chart of accounts, which Accounting owns and ships read-only to every product
+- the chart of accounts and the tax codes (rate, regime, VAT return and control-statement mapping), which Accounting owns and ships read-only to every product
+- parties carry their IČO and DIČ
 
 **Domains.** Each domain owns its records. The last column says what a product built on the domain needs from other domains in order to sell alone.
 
