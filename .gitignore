@@ -1,0 +1,15 @@
+# Local Claude Code and Conductor state
+.context/
+.claude/settings.local.json
+.claude/handoffs/
+.claude/progress.md
+.claude/worktrees/
+CLAUDE.local.md
+
+# Dependencies
+node_modules/
+
+# Secrets never go to this public repo
+.env
+.env.*
+!.env.example
