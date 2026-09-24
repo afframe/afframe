@@ -55,7 +55,7 @@ nginx serving a static page and `/health`. Exists only to exercise build, deploy
 ### 4.1. Postgres (Railway)
 
 - Railway-managed Postgres service in EU West, declared as `postgres("postgres")` in `.railway/railway.ts`; services reach it over the private network (`postgres.railway.internal`) via `${{postgres.DATABASE_URL}}`.
-- Daily volume backups and point-in-time recovery (about 4 weeks, pgBackRest WAL archiving).
+- Daily volume backups and point-in-time recovery (about 4 weeks, pgBackRest WAL archiving), switched on in the one-time setup (`docs/railway.md`).
 - Each PR environment gets its own empty Postgres.
 - Schema changes: expand/contract, run as pre-deploy migrations.
 
@@ -72,10 +72,10 @@ nginx serving a static page and `/health`. Exists only to exercise build, deploy
 
 - **Hosting:** Railway, Hobby plan, region `europe-west4-drams3a` (EU West, Amsterdam). Chosen for the pre-users phase for price and zero operations; production with users is planned on AWS or similar.
 - **Environments:** `production` (live v0) and ephemeral PR environments. No staging.
-- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `repo-lint`, `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`). On `push` to main only the cheap jobs run, because the merge queue already tested the same SHA.
+- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `repo-lint`, `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`). On `push` to main the run only reports (seconds), because the merge queue already tested the same SHA; this keeps Wait for CI fast.
 - **CD:** Railway autodeploy from `main` with Wait for CI. `deploy-gate.yml` fails on purpose for `no-deploy` / `[no deploy]` to skip a deploy. Zero-downtime switch after `/health` returns 2xx. Rollback from the dashboard (72 h image retention on Hobby).
 - **Branch protection:** ruleset on the default branch: PR required, `ci` required, squash only, merge queue (ALLGREEN, 5 builds), linear history, no deletion or force-push, no bypass actors.
-- **Cost:** about $2 to $4 of usage per month inside the $5 Hobby fee; services sleep when idle. Usage alert $5, hard limit $20.
+- **Cost:** estimated $2 to $4 of usage per month inside the $5 Hobby fee; services sleep when idle. Usage alert $5 and hard limit $20, set in the one-time setup.
 
 ## 7. Security Considerations
 

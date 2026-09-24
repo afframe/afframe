@@ -35,7 +35,6 @@ jobs:
     timeout-minutes: 15
     environment: railway-production
     env:
-      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       RAILWAY_CLI_VERSION: "5.62.1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,12 +44,16 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npm install --global "@railway/cli@${RAILWAY_CLI_VERSION}"
+      # Dependency install scripts never see the token: it is set only on the two Railway steps.
+      - run: npm ci --ignore-scripts
+      - run: npm install --global --ignore-scripts "@railway/cli@${RAILWAY_CLI_VERSION}"
       - name: Plan
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: railway config plan
       - name: Apply
         env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           CONFIRM_DESTRUCTIVE: ${{ inputs.confirm_destructive }}
         run: |
           if [[ "$CONFIRM_DESTRUCTIVE" == "true" ]]; then
