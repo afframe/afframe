@@ -1,7 +1,8 @@
 -- Accounting domain: posts statutory journal entries from the same typed records.
 -- It never reads position_entry. Already posted sources are skipped (idempotent), so
 -- every source is a unit that never changes after posting (a document, one payment
--- allocation, one classification). Every entry points to its source record.
+-- allocation, one classification, one payroll allocation). Every entry points to its
+-- source record and carries that record's own recorded_on.
 -- Account codes follow Czech chart-of-accounts groups and are illustrative only.
 set search_path = finance_model;
 
@@ -21,7 +22,7 @@ begin
         returning id, source_id
     )
     insert into journal_line (journal_entry_id, account_code, project_id, debit, credit)
-    select ne.id, case when coalesce(pol.to_stock, grl.id is not null) then '112' else a.code end, l.project_id, l.amount_net, 0
+    select ne.id, case when l.to_stock or coalesce(pol.to_stock, grl.id is not null) then '112' else a.code end, l.project_id, l.amount_net, 0
     from new_entry ne
     join supplier_invoice_line l on l.supplier_invoice_id = ne.source_id
     join account a on a.category_id = l.category_id
@@ -64,8 +65,8 @@ begin
     from new_entry ne
     join stock_issue_line l on l.stock_issue_id = ne.source_id;
 
-    -- Payroll runs: the cost lines, as re-attributed by timesheets, against the payroll
-    -- liability, dated at period end. The cost lines sum to the employer cost.
+    -- Payroll runs: the cost lines as posted, against the payroll liability, dated at
+    -- period end. The cost lines sum to the employer cost.
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
         select 'payroll_run:' || r.id, (r.period_month + interval '1 month - 1 day')::date, r.posted_on, 'payroll_run', r.id
@@ -77,13 +78,33 @@ begin
     select ne.id, a.code, u.project_id, u.amount, 0
     from new_entry ne
     join payroll_line pl on pl.payroll_run_id = ne.source_id
-    join payroll_cost_unit u on u.payroll_line_id = pl.id and u.amount <> 0
+    join payroll_cost_unit u on u.payroll_line_id = pl.id and u.amount <> 0 and u.unit_type = 'payroll_cost_line'
     join account a on a.category_id = u.category_id
     union all
     select ne.id, '331', null, 0, sum(pl.employer_cost)
     from new_entry ne
     join payroll_line pl on pl.payroll_run_id = ne.source_id
     group by ne.id;
+
+    -- Payroll allocations (REDTEAM-1): each re-attribution of a posted cost line to the
+    -- project of the hours is its own entry, dated at period end, so a late allocation
+    -- reaches the ledger without changing the posted payroll run.
+    with new_entry as (
+        insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
+        select 'payroll_allocation:' || pa.id, (r.period_month + interval '1 month - 1 day')::date,
+               greatest(pa.recorded_on, r.posted_on), 'payroll_allocation', pa.id
+        from payroll_allocation pa
+        join payroll_cost_line pc on pc.id = pa.payroll_cost_line_id
+        join payroll_line pl on pl.id = pc.payroll_line_id
+        join payroll_run r on r.id = pl.payroll_run_id
+        on conflict (source_type, source_id) do nothing
+        returning id, source_id
+    )
+    insert into journal_line (journal_entry_id, account_code, project_id, debit, credit)
+    select ne.id, a.code, u.project_id, greatest(u.amount, 0), greatest(-u.amount, 0)
+    from new_entry ne
+    join payroll_cost_unit u on u.unit_type = 'payroll_allocation' and u.unit_id = ne.source_id
+    join account a on a.category_id = u.category_id;
 
     -- Customer invoices: receivable, revenue by project, output VAT (none under reverse charge).
     with new_entry as (
@@ -115,7 +136,7 @@ begin
     -- advances, against the bank account's ledger account.
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
-        select 'payment_allocation:' || pa.id, bt.booked_on, bt.recorded_on, 'payment_allocation', pa.id
+        select 'payment_allocation:' || pa.id, bt.booked_on, greatest(pa.recorded_on, bt.recorded_on), 'payment_allocation', pa.id
         from payment_allocation pa
         join bank_transaction bt on bt.id = pa.bank_transaction_id
         on conflict (source_type, source_id) do nothing
@@ -145,7 +166,7 @@ begin
     -- mapped account, or the account named by the classification.
     with new_entry as (
         insert into journal_entry (id, entry_date, recorded_on, source_type, source_id)
-        select 'bank_line_classification:' || c.id, bt.booked_on, bt.recorded_on, 'bank_line_classification', c.id
+        select 'bank_line_classification:' || c.id, bt.booked_on, greatest(c.recorded_on, bt.recorded_on), 'bank_line_classification', c.id
         from bank_line_classification c
         join bank_transaction bt on bt.id = c.bank_transaction_id
         on conflict (source_type, source_id) do nothing

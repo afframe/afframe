@@ -87,12 +87,21 @@ from journal_line jl join account a on a.code = jl.account_code
 group by 1, 2 order by 1;
 
 \echo '== 9. Reconciliation: management actuals vs statutory P&L by project, category, month'
+-- Management-only adjustments (ARCH-4) are shown as a named reconciling item.
 create temporary view reconciliation as
 with management as (
     select coalesce(project_id, '-') as project_id, category_id,
-           date_trunc('month', effective_on)::date as period_month, sum(amount) as amount
+           date_trunc('month', effective_on)::date as period_month, sum(amount) as amount,
+           sum(amount) filter (where source_type = 'management_adjustment') as adjustment
     from position_entry
     where family in ('cost', 'revenue') and stage = 'actual'
+    group by 1, 2, 3
+),
+reasons as (
+    select coalesce(project_id, '-') as project_id, category_id,
+           date_trunc('month', effective_on)::date as period_month,
+           string_agg(distinct reason_code, ', ') as reasons
+    from management_adjustment
     group by 1, 2, 3
 ),
 ledger as (
@@ -107,9 +116,12 @@ ledger as (
     group by 1, 2, 3
 )
 select project_id, category_id, period_month,
-       m.amount as management, l.amount as ledger, coalesce(m.amount, 0) - coalesce(l.amount, 0) as difference
+       m.amount as management, l.amount as ledger,
+       coalesce(m.amount, 0) - coalesce(l.amount, 0) - coalesce(m.adjustment, 0) as difference,
+       m.adjustment, r.reasons
 from management m
-full join ledger l using (project_id, category_id, period_month);
+full join ledger l using (project_id, category_id, period_month)
+left join reasons r using (project_id, category_id, period_month);
 select * from reconciliation order by 1, 2, 3;
 
 \echo '== 10. Timesheet correction: TS6 on the wrong project, reversed on 28 May'
@@ -161,20 +173,28 @@ order by journal_entry_id;
 -- ---------------------------------------------------------------------------
 \o /dev/null
 
--- Generic invariant: every cost and revenue stage, per project, equals the open
+-- Generic invariant: every cost and revenue stage, per project and category, equals the open
 -- remainder of the typed records computed directly (quantity not yet passed on,
 -- at the record's own price). It is a consistency check: it re-derives each stage
--- from the same links, so a missing link hides from both sides.
+-- from the same links, so a missing link hides from both sides. Whether a supplier
+-- invoice counts is computed here from invoice_response, not from the model's
+-- approval view (EVIDENCE-7).
+create temporary view counting_invoice as
+select si.id as supplier_invoice_id
+from supplier_invoice si
+where not si.requires_approval
+   or exists (select 1 from invoice_response r where r.supplier_invoice_id = si.id and r.response_code in ('AP', 'CA'));
+
 create temporary view state_position as
-select 'cost' as family, 'expected' as stage, mr.project_id,
+select 'cost' as family, 'expected' as stage, mr.project_id, mrl.category_id,
        sum((mrl.quantity - coalesce(f.qty, 0)) * mrl.estimated_unit_price) as amount
 from material_request_line mrl
 join material_request mr on mr.id = mrl.material_request_id
 left join (select material_request_line_id, sum(quantity) as qty from request_fulfilment group by 1) f
   on f.material_request_line_id = mrl.id
-group by 3
+group by 3, 4
 union all
-select 'cost', 'committed', pol.project_id,
+select 'cost', 'committed', pol.project_id, pol.category_id,
        sum((t.quantity - coalesce(r.qty, 0) - coalesce(d.qty, 0)) * t.unit_price)
 from purchase_order_line pol
 join purchase_order_line_terms t on t.purchase_order_line_id = pol.id
@@ -182,24 +202,26 @@ left join (select purchase_order_line_id, sum(quantity) as qty from goods_receip
            where supplier_invoice_line_id is null group by 1) r
   on r.purchase_order_line_id = pol.id
 left join (select l.purchase_order_line_id, sum(l.quantity) as qty from supplier_invoice_line l
-           join supplier_invoice_approval a on a.supplier_invoice_id = l.supplier_invoice_id and a.counts_from is not null
+           join counting_invoice a on a.supplier_invoice_id = l.supplier_invoice_id
            group by 1) d
   on d.purchase_order_line_id = pol.id
-where not pol.to_stock
-group by 3
+join category pcat on pcat.id = pol.category_id
+where pcat.family = 'cost' and not pol.to_stock
+group by 3, 4
 union all
-select 'cost', 'incurred', pol.project_id, sum((grl.quantity - coalesce(i.qty, 0)) * t.unit_price)
+select 'cost', 'incurred', pol.project_id, pol.category_id, sum((grl.quantity - coalesce(i.qty, 0)) * t.unit_price)
 from goods_receipt_line grl
 join purchase_order_line pol on pol.id = grl.purchase_order_line_id
 join purchase_order_line_terms t on t.purchase_order_line_id = pol.id
 left join (select l.goods_receipt_line_id, sum(l.quantity) as qty from supplier_invoice_line l
-           join supplier_invoice_approval a on a.supplier_invoice_id = l.supplier_invoice_id and a.counts_from is not null
+           join counting_invoice a on a.supplier_invoice_id = l.supplier_invoice_id
            group by 1) i
   on i.goods_receipt_line_id = grl.id
-where not pol.to_stock and grl.supplier_invoice_line_id is null
-group by 3
+join category pcat on pcat.id = pol.category_id
+where pcat.family = 'cost' and not pol.to_stock and grl.supplier_invoice_line_id is null
+group by 3, 4
 union all
-select 'cost', 'incurred', te.project_id, sum((te.hours - coalesce(a.hours, 0)) * r.hourly_rate)
+select 'cost', 'incurred', te.project_id, 'labour', sum((te.hours - coalesce(a.hours, 0)) * r.hourly_rate)
 from timesheet_entry te
 left join (select timesheet_entry_id, sum(hours) as hours from payroll_allocation group by 1) a
   on a.timesheet_entry_id = te.id
@@ -210,59 +232,85 @@ cross join lateral (
 ) r
 group by 3
 union all
-select 'cost', 'actual', l.project_id, sum(l.amount_net)
+select c.family, 'actual', l.project_id, l.category_id, sum(case c.family when 'cost' then l.amount_net else -l.amount_net end)
 from supplier_invoice_line l
-join supplier_invoice_approval a on a.supplier_invoice_id = l.supplier_invoice_id and a.counts_from is not null
+join counting_invoice a on a.supplier_invoice_id = l.supplier_invoice_id
+join category c on c.id = l.category_id
 left join goods_receipt_line grl on grl.id = l.goods_receipt_line_id
 left join purchase_order_line pol on pol.id = coalesce(grl.purchase_order_line_id, l.purchase_order_line_id)
-where not coalesce(pol.to_stock, grl.id is not null)
-group by 3
+where c.family in ('cost', 'revenue') and not l.to_stock and not coalesce(pol.to_stock, grl.id is not null)
+group by c.family, l.project_id, l.category_id
 union all
-select 'cost', 'actual', si.project_id, sum(l.quantity * l.unit_cost)
+select 'cost', 'actual', si.project_id, l.category_id, sum(l.quantity * l.unit_cost)
 from stock_issue_line l join stock_issue si on si.id = l.stock_issue_id
-group by 3
+group by 3, 4
 union all
-select 'cost', 'actual', x.project_id, sum(x.amount)
-from (select project_id, amount from payroll_cost_line
+select 'cost', 'actual', x.project_id, x.category_id, sum(x.amount)
+from (select project_id, category_id, amount from payroll_cost_line
       union all
-      select te.project_id, a.amount from payroll_allocation a join timesheet_entry te on te.id = a.timesheet_entry_id
+      select te.project_id, pc.category_id, a.amount from payroll_allocation a
+      join timesheet_entry te on te.id = a.timesheet_entry_id join payroll_cost_line pc on pc.id = a.payroll_cost_line_id
       union all
-      select pc.project_id, -a.amount from payroll_allocation a join payroll_cost_line pc on pc.id = a.payroll_cost_line_id) x
-group by 3
+      select pc.project_id, pc.category_id, -a.amount from payroll_allocation a join payroll_cost_line pc on pc.id = a.payroll_cost_line_id) x
+group by 3, 4
 union all
-select c.family, 'actual', b.project_id, sum(case c.family when 'cost' then -b.amount else b.amount end)
+select c.family, 'actual', b.project_id, b.category_id, sum(case c.family when 'cost' then -b.amount else b.amount end)
 from bank_line_classification b join category c on c.id = b.category_id
 where c.family in ('cost', 'revenue')
-group by c.family, b.project_id
+group by c.family, b.project_id, b.category_id
 union all
-select c.family, 'actual', l.project_id, sum(case c.family when 'cost' then l.debit - l.credit else l.credit - l.debit end)
+select c.family, 'actual', l.project_id, l.category_id, sum(case c.family when 'cost' then l.debit - l.credit else l.credit - l.debit end)
 from internal_document_line l join category c on c.id = l.category_id
 where c.family in ('cost', 'revenue')
-group by c.family, l.project_id
+group by c.family, l.project_id, l.category_id
 union all
-select 'revenue', 'expected', o.project_id, sum(o.amount_net)
+select 'revenue', 'expected', o.project_id, o.category_id, sum(o.amount_net)
 from opportunity o
 where not exists (select 1 from opportunity_outcome oo where oo.opportunity_id = o.id)
-group by 3
+group by 3, 4
 union all
-select 'revenue', 'committed', so.project_id, sum((sol.quantity - coalesce(i.qty, 0)) * sol.unit_price)
+select 'revenue', 'committed', so.project_id, sol.category_id, sum((sol.quantity - coalesce(i.qty, 0)) * sol.unit_price)
 from sales_order_line sol
 join sales_order so on so.id = sol.sales_order_id
 left join (select sales_order_line_id, sum(quantity) as qty from customer_invoice_line group by 1) i
   on i.sales_order_line_id = sol.id
-group by 3
+group by 3, 4
 union all
-select 'revenue', 'actual', l.project_id, sum(l.amount_net)
-from customer_invoice_line l
-group by 3;
+select c.family, 'actual', l.project_id, l.category_id, sum(case c.family when 'revenue' then l.amount_net else -l.amount_net end)
+from customer_invoice_line l join category c on c.id = l.category_id
+where c.family in ('cost', 'revenue')
+group by c.family, l.project_id, l.category_id
+union all
+select c.family, 'actual', m.project_id, m.category_id, sum(m.amount)
+from management_adjustment m join category c on c.id = m.category_id
+where c.family in ('cost', 'revenue')
+group by c.family, m.project_id, m.category_id
+union all
+-- MONEY-10: accruals and WIP linked to an order or sales line use up its commitment.
+select 'cost', 'committed', pol.project_id, pol.category_id, -sum(l.debit - l.credit)
+from internal_document_line l join purchase_order_line pol on pol.id = l.purchase_order_line_id
+group by 3, 4
+union all
+select 'cost', 'incurred', pol.project_id, pol.category_id, -sum(l.debit - l.credit)
+from internal_document_line l
+join goods_receipt_line grl on grl.id = l.goods_receipt_line_id
+join purchase_order_line pol on pol.id = grl.purchase_order_line_id
+group by 3, 4
+union all
+select 'revenue', 'committed', so.project_id, sol.category_id, -sum(l.credit - l.debit)
+from internal_document_line l
+join sales_order_line sol on sol.id = l.sales_order_line_id
+join sales_order so on so.id = sol.sales_order_id
+group by 3, 4;
 
+-- MONEY-14: compared per project and category, the grain budget control reports at.
 create temporary view stage_difference as
 select coalesce(sum(abs(coalesce(p.amount, 0) - coalesce(s.amount, 0))), 0) as difference
-from (select family, stage, coalesce(project_id, '-') as project_id, sum(amount) as amount
-      from state_position group by 1, 2, 3) s
-full join (select family, stage, coalesce(project_id, '-') as project_id, sum(amount) as amount
-           from position_entry where family in ('cost', 'revenue') group by 1, 2, 3) p
-using (family, stage, project_id);
+from (select family, stage, coalesce(project_id, '-') as project_id, category_id, sum(amount) as amount
+      from state_position group by 1, 2, 3, 4) s
+full join (select family, stage, coalesce(project_id, '-') as project_id, category_id, sum(amount) as amount
+           from position_entry where family in ('cost', 'revenue') group by 1, 2, 3, 4) p
+using (family, stage, project_id, category_id);
 select assert_equal('every cost and revenue stage equals the open remainder of typed records', difference, 0)
 from stage_difference;
 
@@ -314,27 +362,47 @@ invoiced as (
     left join goods_receipt_line grl on grl.id = l.goods_receipt_line_id
 ),
 applied as (
-    select aa.amount, adv.purchase_order_id, adv.supplier_advance_request_id
+    select aa.id, aa.amount, adv.purchase_order_id, adv.supplier_advance_request_id
     from advance_application aa
     join counting c on c.id = aa.supplier_invoice_id
     join payment_allocation adv on adv.id = aa.advance_allocation_id
+),
+-- MONEY-9: a proforma for an order relieves the order lines' forecast, and hands back
+-- what is applied; each amount is spread over the order lines by ordered gross.
+order_share as (
+    select x.project_id, x.category_id,
+           x.share + case when x.position = 1 then x.amount - sum(x.share) over (partition by x.kind, x.id) else 0 end as amount
+    from (select s.*, round(s.amount * s.gross / sum(s.gross) over (partition by s.kind, s.id), 2) as share,
+                 row_number() over (partition by s.kind, s.id order by s.gross desc, s.line_id) as position
+          from (select 'proforma' as kind, r.id, r.amount, pol.id as line_id, pol.project_id, pol.category_id,
+                       round(pol.quantity * pol.unit_price * (1 + pol.vat_rate), 2) as gross
+                from supplier_advance_request r join purchase_order_line pol on pol.purchase_order_id = r.purchase_order_id
+                union all
+                select 'applied', ap.id, -ap.amount, pol.id, pol.project_id, pol.category_id,
+                       round(pol.quantity * pol.unit_price * (1 + pol.vat_rate), 2)
+                from applied ap
+                join supplier_advance_request r on r.id = ap.supplier_advance_request_id
+                join purchase_order_line pol on pol.purchase_order_id = r.purchase_order_id) s) x
 )
--- Orders: accepted gross, less what counting invoices billed at the accepted price.
+-- Orders: accepted gross, less what counting invoices billed at the accepted price
+-- (rounded once on the total billed quantity).
 select 'forecast' as stage, a.project_id, a.category_id,
        -round(a.quantity * a.unit_price * (1 + a.vat_rate), 2)
-       + coalesce((select sum(round(i.quantity * a.unit_price * (1 + a.vat_rate), 2))
-                   from invoiced i where i.order_line_id = a.id), 0) as amount
+       + round(coalesce((select sum(i.quantity) from invoiced i where i.order_line_id = a.id), 0)
+               * a.unit_price * (1 + a.vat_rate), 2) as amount
 from accepted a
 union all
 select 'open', project_id, category_id, -(amount_net + vat_amount) from invoiced
 union all
 select 'open', project_id, category_id, -amount from supplier_advance_request
 union all
+select 'forecast', project_id, category_id, amount from order_share
+union all
 -- Sales orders: ordered gross, less what customer invoices billed at order price.
 select 'forecast', so.project_id, sol.category_id,
        round(sol.quantity * sol.unit_price * (1 + sol.vat_rate), 2)
-       - coalesce((select sum(round(l.quantity * sol.unit_price * (1 + sol.vat_rate), 2))
-                   from customer_invoice_line l where l.sales_order_line_id = sol.id), 0)
+       - round(coalesce((select sum(l.quantity) from customer_invoice_line l where l.sales_order_line_id = sol.id), 0)
+               * sol.unit_price * (1 + sol.vat_rate), 2)
 from sales_order_line sol join sales_order so on so.id = sol.sales_order_id
 union all
 select 'open', project_id, category_id, amount_net + vat_amount from customer_invoice_line
@@ -360,6 +428,11 @@ select 'settled', project_id, category_id, amount from bank_line_classification
 union all
 select 'forecast', e.project_id, e.category_id,
        e.amount - coalesce((select sum(c.amount) from bank_line_classification c where c.expected_cash_id = e.id), 0)
+       - coalesce((select sum(l.amount_net + l.vat_amount) from customer_invoice ci
+                   join customer_invoice_line l on l.customer_invoice_id = ci.id where ci.expected_cash_id = e.id), 0)
+       + coalesce((select sum(l.amount_net + l.vat_amount) from supplier_invoice_line l
+                   join counting c on c.id = l.supplier_invoice_id
+                   join supplier_invoice si on si.id = l.supplier_invoice_id where si.expected_cash_id = e.id), 0)
 from expected_cash e
 union all
 -- Payments move money from open (or, for an order advance, forecast) to settled.
@@ -497,7 +570,7 @@ select assert_equal('payments only settle counting invoices', count(*), 0)
 from payment_allocation pa
 join bank_transaction bt on bt.id = pa.bank_transaction_id
 left join supplier_invoice_approval a on a.supplier_invoice_id = pa.supplier_invoice_id
-where pa.supplier_invoice_id is not null and (a.counts_from is null or a.counts_from > bt.recorded_on);
+where pa.supplier_invoice_id is not null and (a.counts_from is null or a.counts_from > greatest(pa.recorded_on, bt.recorded_on));
 
 -- Advance: paying half of PO5 before delivery never changes the total cash exposure of the order.
 select assert_equal('PO5 cash exposure on 30 Apr (advance paid, rest forecast)', sum(amount), -50820)
@@ -579,6 +652,33 @@ join (select customer_invoice_id, sum(amount) as amount from payment_allocation 
   using (customer_invoice_id)
 where p.amount > g.gross;
 
+-- MONEY-13: the same guards on the sell and people sides.
+create temporary view sell_people_overrun as
+select 'timesheet' as kind, te.id
+from timesheet_entry te
+where te.reverses_id is null  -- hours net of their reversals
+  and te.hours + (select coalesce(sum(r.hours), 0) from timesheet_entry r where r.reverses_id = te.id)
+      < (select coalesce(sum(a.hours), 0) from payroll_allocation a
+         where a.timesheet_entry_id = te.id or a.timesheet_entry_id in (select r.id from timesheet_entry r where r.reverses_id = te.id))
+union all
+select 'sales_order_line', sol.id
+from sales_order_line sol
+where sol.quantity < (select coalesce(sum(l.quantity), 0) from customer_invoice_line l where l.sales_order_line_id = sol.id)
+union all
+select 'payroll_run', pr.id
+from payroll_run pr
+where (select sum(pl.employer_cost) from payroll_line pl where pl.payroll_run_id = pr.id)
+      < (select coalesce(sum(pa.amount), 0) from payment_allocation pa where pa.payroll_run_id = pr.id)
+union all
+select 'proforma', r.id
+from supplier_advance_request r
+where r.amount < (select coalesce(sum(pa.amount), 0) from payment_allocation pa where pa.supplier_advance_request_id = r.id);
+select assert_equal('MONEY-13: hours allocated <= hours worked', count(*) filter (where kind = 'timesheet'), 0),
+       assert_equal('MONEY-13: invoiced <= sales order', count(*) filter (where kind = 'sales_order_line'), 0),
+       assert_equal('MONEY-13: payroll paid <= payroll owed', count(*) filter (where kind = 'payroll_run'), 0),
+       assert_equal('MONEY-13: proforma paid <= proforma amount', count(*) filter (where kind = 'proforma'), 0)
+from sell_people_overrun;
+
 -- A request cannot stay linked to more than the supplier accepted: when a response cuts
 -- an order line, Procurement must return the difference to the request.
 select assert_equal('request links <= accepted order quantity', count(*), 0)
@@ -633,6 +733,14 @@ select assert_equal('ARCH-2: every bank line is fully matched or classified', co
 from bank_line_unexplained where amount <> 0;
 select assert_equal('MONEY-2: each bank account in the ledger moves exactly with its bank lines', difference, 0)
 from bank_ledger_difference;
+-- ARCH-11 / MONEY-15: a bank line classified to a P&L account carries that account's category.
+create temporary view classification_without_category as
+select c.id from bank_line_classification c
+join account a on a.code = c.account_code
+join category cat on cat.id = a.category_id
+where c.category_id is null and cat.family in ('cost', 'revenue');
+select assert_equal('ARCH-11: a bank line classified to a P&L account carries a category', count(*), 0)
+from classification_without_category;
 
 -- Internal documents (ARCH-3): the only source of ledger-only postings.
 select assert_equal('ARCH-3: every journal entry points to an existing source record', count(*), 0)
@@ -642,6 +750,7 @@ where not exists (
     union all select 1 from customer_invoice x where je.source_type = 'customer_invoice' and x.id = je.source_id
     union all select 1 from stock_issue x where je.source_type = 'stock_issue' and x.id = je.source_id
     union all select 1 from payroll_run x where je.source_type = 'payroll_run' and x.id = je.source_id
+    union all select 1 from payroll_allocation x where je.source_type = 'payroll_allocation' and x.id = je.source_id
     union all select 1 from payment_allocation x where je.source_type = 'payment_allocation' and x.id = je.source_id
     union all select 1 from bank_line_classification x where je.source_type = 'bank_line_classification' and x.id = je.source_id
     union all select 1 from advance_application x where je.source_type = 'advance_application' and x.id = je.source_id
@@ -651,6 +760,41 @@ from journal_entry where source_type = 'internal_document' and source_id = 'OB-2
 select assert_equal('ARCH-3: internal document lines carry the management category of their account', count(*), 0)
 from internal_document_line l join account a on a.code = l.account_code
 where l.category_id is distinct from a.category_id;
+-- ARCH-3: payroll registered under Accounting alone goes on payroll_run and payroll_cost_line,
+-- so no internal-document line may carry payroll cost for a month that has a payroll run.
+create temporary view internal_document_payroll_duplicate as
+select l.id
+from internal_document_line l
+join internal_document d on d.id = l.internal_document_id
+where exists (select 1 from payroll_cost_line pc
+              join payroll_line pl on pl.id = pc.payroll_line_id
+              join payroll_run pr on pr.id = pl.payroll_run_id
+              where pc.category_id = l.category_id and pr.period_month = date_trunc('month', d.issued_on));
+select assert_equal('ARCH-3: no internal-document line duplicates payroll cost for the same period', count(*), 0)
+from internal_document_payroll_duplicate;
+select assert_equal('MONEY-10: an internal-document line relieves only a commitment of its own family', count(*), 0)
+from internal_document_line l
+left join category c on c.id = l.category_id
+left join goods_receipt_line grl on grl.id = l.goods_receipt_line_id
+left join purchase_order_line pol on pol.id = coalesce(l.purchase_order_line_id, grl.purchase_order_line_id)
+left join category pcat on pcat.id = pol.category_id
+where (pol.id is not null and (c.family is distinct from 'cost' or pcat.family <> 'cost' or pol.to_stock))
+   or (l.goods_receipt_line_id is not null and pol.id is null)
+   or (l.sales_order_line_id is not null and c.family is distinct from 'revenue');
+
+-- Milestones (ARCH-1, REDTEAM-2): a line tags only a milestone of its own project.
+select assert_equal('ARCH-1: every milestone tag belongs to the line''s project', count(*), 0)
+from (select so.project_id, sol.milestone_id from sales_order_line sol join sales_order so on so.id = sol.sales_order_id
+      union all select project_id, milestone_id from customer_invoice_line
+      union all select project_id, milestone_id from purchase_order_line
+      union all select project_id, milestone_id from supplier_invoice_line
+      union all select project_id, milestone_id from plan_line) x
+join project_milestone m on m.id = x.milestone_id
+where x.project_id is distinct from m.project_id;
+
+select assert_equal('ARCH-4: management adjustments use cost or revenue categories', count(*), 0)
+from management_adjustment m join category c on c.id = m.category_id
+where c.family = 'cash';
 
 -- Plans (ARCH-5): P&L plan lines use cost or revenue categories.
 select assert_equal('ARCH-5: P&L plan lines use cost or revenue categories', count(*), 0)
@@ -669,7 +813,7 @@ begin;
 insert into purchase_order values ('PX1', 'SUPPLIER_A', '2026-05-01', '2026-05-01', 14);
 insert into purchase_order_line values ('PX1-1', 'PX1', 'panels', 'P1', false, 'materials', 5, 100, 0.21, '2026-05-10');
 insert into bank_transaction values ('BX1', 'BA1', '2026-05-02', -605, 'advance, order later rejected', '2026-05-02');
-insert into payment_allocation (id, bank_transaction_id, purchase_order_id, amount) values ('PAX1', 'BX1', 'PX1', 605);
+insert into payment_allocation (id, bank_transaction_id, purchase_order_id, amount, recorded_on) values ('PAX1', 'BX1', 'PX1', 605, '2026-05-02');
 insert into order_response values ('ORX1', 'PX1', 'RE', '2026-05-03', '2026-05-03');
 select assert_equal('rejected order with an advance: projection readable, advance settled', sum(amount), -605)
 from position_entry where source_id like 'PAX1:%' and stage = 'settled';
@@ -683,7 +827,7 @@ insert into supplier_invoice values ('VX1', 'SUPPLIER_C', '2026-05-20', '2026-06
 insert into supplier_invoice_line (id, supplier_invoice_id, project_id, category_id, quantity, amount_net, vat_amount)
 values ('VX1-1', 'VX1', 'P1', 'subcontracting', 0, 10000, 0);
 insert into bank_transaction values ('BX2', 'BA1', '2026-05-05', -1000, 'advance on PO3', '2026-05-05');
-insert into payment_allocation (id, bank_transaction_id, purchase_order_id, amount) values ('PAX2', 'BX2', 'PO3', 1000);
+insert into payment_allocation (id, bank_transaction_id, purchase_order_id, amount, recorded_on) values ('PAX2', 'BX2', 'PO3', 1000, '2026-05-05');
 insert into advance_application values ('AAX2', 'PAX2', 'VX1', 1000, '2026-05-21', '2026-05-21');
 select assert_equal('advance applied to an unlinked invoice still reduces the payable', sum(amount), 1000)
 from position_entry where source_id like 'AAX2:%' and stage = 'open';
@@ -706,7 +850,7 @@ insert into supplier_invoice_line (id, supplier_invoice_id, project_id, category
     ('R1-2', 'R1', 'P1', 'materials', 0, 100, 0),
     ('R1-3', 'R1', 'P1', 'materials', 0, 100, 0);
 insert into bank_transaction values ('RB1', 'BA1', '2026-05-10', -100, 'rounding probe', '2026-05-10');
-insert into payment_allocation (id, bank_transaction_id, supplier_invoice_id, amount) values ('RPA1', 'RB1', 'R1', 100);
+insert into payment_allocation (id, bank_transaction_id, supplier_invoice_id, amount, recorded_on) values ('RPA1', 'RB1', 'R1', 100, '2026-05-10');
 select assert_equal('rounding: settled equals the payment', sum(amount), -100)
 from position_entry where source_id like 'RPA1:%' and stage = 'settled';
 rollback;
@@ -720,9 +864,9 @@ insert into payroll_line values ('PL-05-E1', 'PR-2026-05', 'E1', 3300), ('PL-05-
 insert into payroll_cost_line values
     ('PC-05-E1', 'PL-05-E1', 'labour', null, null, 3300),
     ('PC-05-E2', 'PL-05-E2', 'labour', null, 'ADMIN', 50000);
-insert into payroll_allocation values ('PA-05-1', 'PC-05-E1', 'TS5', 6, 3300);
+insert into payroll_allocation values ('PA-05-1', 'PC-05-E1', 'TS5', 6, 3300, '2026-06-10');
 insert into bank_transaction values ('BX-PAY-05', 'BA1', '2026-06-12', -53300, 'Payroll May', '2026-06-12');
-insert into payment_allocation (id, bank_transaction_id, payroll_run_id, amount) values ('PAX-05', 'BX-PAY-05', 'PR-2026-05', 53300);
+insert into payment_allocation (id, bank_transaction_id, payroll_run_id, amount, recorded_on) values ('PAX-05', 'BX-PAY-05', 'PR-2026-05', 53300, '2026-06-12');
 call post_to_ledger();
 select assert_equal('ARCH-1: payroll without timesheets posts a balanced entry', sum(debit) - sum(credit), 0),
        assert_equal('ARCH-1: the ledger debits exactly the cost lines', sum(debit) filter (where account_code = '521'), 53300)
@@ -750,10 +894,10 @@ insert into bank_transaction values
     ('BX-FEE', 'BA1', '2026-05-31', -150, 'Bank fee May', '2026-05-31'),
     ('BX-T1', 'BA1', '2026-05-28', -100000, 'Transfer to savings', '2026-05-28'),
     ('BX-T2', 'BA2', '2026-05-29', 100000, 'Transfer from current account', '2026-05-29');
-insert into bank_line_classification (id, bank_transaction_id, category_id, account_code, amount) values
-    ('CL-FEE', 'BX-FEE', 'bank_fees', null, -150),
-    ('CL-T1', 'BX-T1', null, '261', -100000),
-    ('CL-T2', 'BX-T2', null, '261', 100000);
+insert into bank_line_classification (id, bank_transaction_id, category_id, account_code, amount, recorded_on) values
+    ('CL-FEE', 'BX-FEE', 'bank_fees', null, -150, '2026-05-31'),
+    ('CL-T1', 'BX-T1', null, '261', -100000, '2026-05-28'),
+    ('CL-T2', 'BX-T2', null, '261', 100000, '2026-05-29');
 call post_to_ledger();
 select assert_equal('ARCH-2: settled equals bank with document-less lines',
     (select sum(amount) from position_entry where family = 'cash' and stage = 'settled'), (select sum(amount) from bank_transaction));
@@ -771,15 +915,54 @@ select assert_equal('ARCH-2: cash invariant holds', by_project_category + by_sta
 rollback;
 
 -- MONEY-2: one bank line matched in two steps, posted after each step.
+-- REDTEAM-1 / MONEY-12: the second match is made on 6 June and carries that time, so
+-- what was known on 5 June does not change.
 begin;
 insert into bank_transaction values ('BX9', 'BA1', '2026-06-01', 200000, 'Client X', '2026-06-01');
-insert into payment_allocation (id, bank_transaction_id, customer_invoice_id, amount) values ('PAX9-CI2', 'BX9', 'CI2', 150000);
+insert into payment_allocation (id, bank_transaction_id, customer_invoice_id, amount, recorded_on) values ('PAX9-CI2', 'BX9', 'CI2', 150000, '2026-06-01');
 call post_to_ledger();
-insert into payment_allocation (id, bank_transaction_id, customer_invoice_id, amount) values ('PAX9-CI3', 'BX9', 'CI3', 50000);
+select assert_equal('REDTEAM-1: P1 settled as known 5 Jun, before the late match', sum(amount), 310040)
+from position_as_of('2026-06-30', '2026-06-05') where project_id = 'P1' and family = 'cash' and stage = 'settled';
+insert into payment_allocation (id, bank_transaction_id, customer_invoice_id, amount, recorded_on) values ('PAX9-CI3', 'BX9', 'CI3', 50000, '2026-06-06');
 call post_to_ledger();
+select assert_equal('REDTEAM-1: a late match leaves the 5 Jun read unchanged', sum(amount), 310040)
+from position_as_of('2026-06-30', '2026-06-05') where project_id = 'P1' and family = 'cash' and stage = 'settled';
+select assert_equal('REDTEAM-1: the late match counts from 6 Jun', sum(amount), 360040)
+from position_as_of('2026-06-30', '2026-06-06') where project_id = 'P1' and family = 'cash' and stage = 'settled';
+select assert_equal('REDTEAM-1: the late match is recorded in the ledger on its own date', count(*), 1)
+from journal_entry where id = 'payment_allocation:PAX9-CI3' and recorded_on = '2026-06-06';
 select assert_equal('MONEY-2: a late allocation reaches the ledger bank account', difference, 0) from bank_ledger_difference;
 select assert_equal('MONEY-2: receivables in the ledger follow the late allocation', sum(debit) - sum(credit), 0)
 from journal_line where account_code = '311';
+rollback;
+
+-- REDTEAM-1 / MONEY-12: May payroll is posted company-level on 10 June and paid on 12 June;
+-- on 20 June it is re-attributed to TS5 (P1). The allocation is its own ledger source.
+begin;
+insert into payroll_run values ('PR-2026-05', '2026-05-01', '2026-06-10', '2026-06-12');
+insert into payroll_line values ('PL-05-E1', 'PR-2026-05', 'E1', 3300);
+insert into payroll_cost_line values ('PC-05-E1', 'PL-05-E1', 'labour', null, null, 3300);
+insert into bank_transaction values ('BX-PAY-05', 'BA1', '2026-06-12', -3300, 'Payroll May', '2026-06-12');
+insert into payment_allocation (id, bank_transaction_id, payroll_run_id, amount, recorded_on) values ('PAX-05', 'BX-PAY-05', 'PR-2026-05', 3300, '2026-06-12');
+call post_to_ledger();
+insert into payroll_allocation values ('PA-05-1', 'PC-05-E1', 'TS5', 6, 3300, '2026-06-20');
+call post_to_ledger();
+select assert_equal('REDTEAM-1: P1 May labour actual as known 15 Jun is unchanged by the late allocation', sum(amount), 64400)
+from position_as_of('2026-05-31', '2026-06-15') where project_id = 'P1' and family = 'cost' and stage = 'actual' and category_id = 'labour';
+select assert_equal('REDTEAM-1: P1 cash as known 15 Jun is unchanged by the late allocation', sum(amount), 237000 + 78610 + 160040)
+from position_as_of('2026-06-30', '2026-06-15') where project_id = 'P1' and family = 'cash';
+select assert_equal('REDTEAM-1: P1 May labour actual as known 20 Jun includes the allocation', sum(amount), 67700)
+from position_as_of('2026-05-31', '2026-06-20') where project_id = 'P1' and family = 'cost' and stage = 'actual' and category_id = 'labour';
+select assert_equal('REDTEAM-1: the late allocation moves the paid wage to P1 as settled', sum(amount) filter (where stage = 'settled'), -3300),
+       assert_equal('REDTEAM-1: nothing of the paid wage stays open on P1', coalesce(sum(amount) filter (where stage = 'open'), 0), 0)
+from position_entry where project_id = 'P1' and family = 'cash' and (source_id like 'PAX-05:%' or source_id in ('PC-05-E1', 'PA-05-1'));
+select assert_equal('REDTEAM-1: the posted payroll run entry is unchanged', count(*), 2)
+from journal_line where journal_entry_id = 'payroll_run:PR-2026-05';
+select assert_equal('REDTEAM-1: the allocation is recorded in the ledger on its own date', count(*), 1)
+from journal_entry where id = 'payroll_allocation:PA-05-1' and recorded_on = '2026-06-20';
+select assert_equal('REDTEAM-1: reconciliation holds after a late allocation', sum(abs(difference)), 0) from reconciliation;
+select assert_equal('REDTEAM-1: stages still equal the typed records', difference, 0) from stage_difference;
+select assert_equal('REDTEAM-1: cash invariant holds', by_project_category + by_stage, 0) from cash_difference;
 rollback;
 
 -- MONEY-5: goods invoiced before they arrive. The receipt names the invoice line.
@@ -807,18 +990,112 @@ rollback;
 
 -- ARCH-3 / REDTEAM-3 (internal document part): a month-end accrual for subcontract work done
 -- but not yet billed, posted from an internal document, counts as management actual.
+-- MONEY-10: it names the order line it accrues for, so it uses up that commitment.
 begin;
 insert into internal_document values ('ACR-2026-05', '2026-05-31', '2026-05-31', 'Accrued subcontract work, May');
 insert into internal_document_line values
-    ('ACR-2026-05-1', 'ACR-2026-05', '518', 'subcontracting', 'P1', null, 5000, 0),
-    ('ACR-2026-05-2', 'ACR-2026-05', '383', null, null, null, 0, 5000);
+    ('ACR-2026-05-1', 'ACR-2026-05', '518', 'subcontracting', 'P1', null, 5000, 0, 'PO3-1', null),
+    ('ACR-2026-05-2', 'ACR-2026-05', '383', null, null, null, 0, 5000, null, null);
 call post_to_ledger();
-select assert_equal('ARCH-3: accrual counts as actual', actual, 95000)
+select assert_equal('ARCH-3: accrual counts as actual', actual, 95000),
+       assert_equal('MONEY-10: the accrual relieves the order line it accrues for', committed, 55000)
 from position_summary('2026-05-31', '2026-05-31') where project_id = 'P1' and family = 'cost' and category_id = 'subcontracting';
+select assert_equal('MONEY-10: consumed stays at the 150 000 contract after an accrual', consumed, 150000),
+       assert_equal('MONEY-10: EAC stays at the contract after an accrual', estimate_at_completion, 150000),
+       assert_equal('MONEY-10: no overrun from an accrual', available, 0)
+from project_control('B1', '2026-05-31', '2026-05-31') where project_id = 'P1' and category_id = 'subcontracting';
 select assert_equal('ARCH-3: reconciliation stays exact with an internal document', sum(abs(difference)), 0) from reconciliation;
 select assert_equal('ARCH-3: stages still equal the typed records', difference, 0) from stage_difference;
 select assert_equal('ARCH-3: the accrual has a source record', count(*), 1)
 from journal_entry where source_type = 'internal_document' and source_id = 'ACR-2026-05';
+-- The reversal on 1 June restores the commitment.
+insert into internal_document values ('ACR-2026-05R', '2026-06-01', '2026-06-01', 'Reversal of ACR-2026-05');
+insert into internal_document_line values
+    ('ACR-2026-05R-1', 'ACR-2026-05R', '518', 'subcontracting', 'P1', null, 0, 5000, 'PO3-1', null),
+    ('ACR-2026-05R-2', 'ACR-2026-05R', '383', null, null, null, 5000, 0, null, null);
+select assert_equal('MONEY-10: the reversal restores the commitment', committed, 60000),
+       assert_equal('MONEY-10: the reversal removes the accrued actual', actual, 90000)
+from position_summary('2026-06-30', '2026-06-30') where project_id = 'P1' and family = 'cost' and category_id = 'subcontracting';
+rollback;
+
+-- MONEY-10, the review's probe (b): a 4 % service receipt on PO3-1 moves 6 000 to incurred,
+-- and the accrual that brings it into the books names that receipt line.
+begin;
+insert into goods_receipt values ('GB10', '2026-05-20', '2026-05-20');
+insert into goods_receipt_line (id, goods_receipt_id, purchase_order_line_id, quantity) values ('GB10-1', 'GB10', 'PO3-1', 4);
+insert into internal_document values ('ACR-B10', '2026-05-31', '2026-05-31', 'Accrued subcontract work received, May');
+insert into internal_document_line (id, internal_document_id, account_code, category_id, project_id, debit, credit, goods_receipt_line_id) values
+    ('ACR-B10-1', 'ACR-B10', '518', 'subcontracting', 'P1', 6000, 0, 'GB10-1'),
+    ('ACR-B10-2', 'ACR-B10', '383', null, null, 0, 6000, null);
+select assert_equal('MONEY-10: an accrual for a receipt leaves the rest committed', committed, 54000),
+       assert_equal('MONEY-10: an accrual for a receipt relieves its incurred', incurred, 0),
+       assert_equal('MONEY-10: an accrual for a receipt is actual', actual, 96000),
+       assert_equal('MONEY-10: consumed stays at the contract with a receipt and its accrual', consumed, 150000)
+from project_control('B1', '2026-05-31', '2026-05-31') where project_id = 'P1' and category_id = 'subcontracting';
+select assert_equal('MONEY-10: stages still equal the typed records with a receipt accrual', difference, 0) from stage_difference;
+rollback;
+
+-- MONEY-10 (WIP part): work in progress recognised against milestone 3 uses up its
+-- contracted revenue, so revenue consumed stays at the contract.
+begin;
+insert into category values ('wip_change', 'revenue', 'Change in work in progress');
+insert into account values ('121', 'Work in progress', null, null), ('611', 'Change in work in progress', 'wip_change', null);
+insert into internal_document values ('WIP-2026-05', '2026-05-31', '2026-05-31', 'WIP on milestone 3');
+insert into internal_document_line values
+    ('WIP-2026-05-1', 'WIP-2026-05', '121', null, null, null, 100000, 0, null, null),
+    ('WIP-2026-05-2', 'WIP-2026-05', '611', 'wip_change', 'P1', null, 0, 100000, null, 'SO1-M3');
+call post_to_ledger();
+select assert_equal('MONEY-10: WIP relieves contracted revenue', sum(committed), 200000),
+       assert_equal('MONEY-10: revenue consumed stays at the contract with WIP', sum(consumed), 1050000)
+from project_control('B1', '2026-05-31', '2026-05-31') where project_id = 'P1' and family = 'revenue';
+select assert_equal('MONEY-10: stages still equal the typed records with WIP', difference, 0) from stage_difference;
+select assert_equal('MONEY-10: reconciliation stays exact with WIP', sum(abs(difference)), 0) from reconciliation;
+rollback;
+
+-- ARCH-11 / MONEY-15: a bank fee classified straight to 568 with its category counts as
+-- management actual; without the category it is caught; a mismatched pair is refused.
+begin;
+insert into bank_transaction values ('BQ4', 'BA1', '2026-05-31', -150, 'Bank fee May', '2026-05-31'),
+                                    ('BQ5', 'BA1', '2026-05-31', -150, 'Bank fee May, second account', '2026-05-31');
+insert into bank_line_classification (id, bank_transaction_id, category_id, account_code, amount, recorded_on)
+values ('CLQ4', 'BQ4', 'bank_fees', '568', -150, '2026-05-31');
+call post_to_ledger();
+select assert_equal('MONEY-15: a fee classified to its account and category is actual cost', sum(amount), 150)
+from position_entry where family = 'cost' and stage = 'actual' and source_id = 'CLQ4';
+select assert_equal('MONEY-15: reconciliation stays exact', sum(abs(difference)), 0) from reconciliation;
+insert into bank_line_classification (id, bank_transaction_id, category_id, account_code, amount, recorded_on)
+values ('CLQ5', 'BQ5', null, '568', -150, '2026-05-31');
+select assert_equal('ARCH-11: a P&L account without its category is caught', count(*), 1) from classification_without_category;
+rollback;
+do $$
+begin
+    insert into bank_transaction values ('BQ6', 'BA1', '2026-05-31', -150, 'Bank fee', '2026-05-31');
+    insert into bank_line_classification (id, bank_transaction_id, category_id, account_code, amount, recorded_on)
+    values ('CLQ6', 'BQ6', 'labour', '568', -150, '2026-05-31');
+    raise exception 'FAILED ARCH-11: a classification whose account and category disagree was accepted';
+exception when foreign_key_violation then perform nextval('assertion_count');
+end
+$$;
+
+-- MONEY-13: each guard catches its case (the review's probes).
+begin;
+insert into payroll_run values ('PR-2026-05', '2026-05-01', '2026-06-10', '2026-06-12');
+insert into payroll_line values ('PL-05-E1', 'PR-2026-05', 'E1', 3300);
+insert into payroll_cost_line values ('PC-05-E1', 'PL-05-E1', 'labour', null, null, 3300);
+insert into payroll_allocation values ('PA-05-1', 'PC-05-E1', 'TS5', 12, 3300, '2026-06-10');
+insert into customer_invoice values ('CIQ6', 'CLIENT_X', '2026-05-31', '2026-06-14', '2026-05-31', 'FV-2026-0096');
+insert into customer_invoice_line values ('CIQ6-1', 'CIQ6', 'SO1-M3', 'P1', 'revenue', 1, 300000, 0),
+                                         ('CIQ6-2', 'CIQ6', 'SO1-M3', 'P1', 'revenue', 1, 300000, 0);
+insert into bank_transaction values ('BQ6A', 'BA1', '2026-05-20', -84800, 'April payroll again', '2026-05-20'),
+                                    ('BQ6B', 'BA1', '2026-05-20', -2000, 'Proforma ZQ6', '2026-05-20');
+insert into payment_allocation (id, bank_transaction_id, payroll_run_id, amount, recorded_on) values ('PAQ6A', 'BQ6A', 'PR-2026-04', 84800, '2026-05-20');
+insert into supplier_advance_request values ('ZQ6', 'SUPPLIER_A', 'P2', 'materials', 1000, '2026-05-10', '2026-05-17', '2026-05-10', 'ZQ-2026-6', null);
+insert into payment_allocation (id, bank_transaction_id, supplier_advance_request_id, amount, recorded_on) values ('PAQ6B', 'BQ6B', 'ZQ6', 2000, '2026-05-20');
+select assert_equal('MONEY-13: over-allocated hours are caught', count(*) filter (where kind = 'timesheet'), 1),
+       assert_equal('MONEY-13: an over-invoiced sales order line is caught', count(*) filter (where kind = 'sales_order_line'), 1),
+       assert_equal('MONEY-13: overpaid payroll is caught', count(*) filter (where kind = 'payroll_run'), 1),
+       assert_equal('MONEY-13: an overpaid proforma is caught', count(*) filter (where kind = 'proforma'), 1)
+from sell_people_overrun;
 rollback;
 
 -- ARCH-5 / REDTEAM-9: Treasury expected cash (a tax payment) feeds the forecast and is
@@ -828,8 +1105,8 @@ insert into expected_cash values ('EC-TAX-06', null, 'taxes', null, null, -30000
 select assert_equal('ARCH-5: expected cash is in the June forecast', sum(amount), -30000)
 from position_entry where family = 'cash' and stage = 'forecast' and category_id = 'taxes' and date_trunc('month', cash_on) = '2026-06-01';
 insert into bank_transaction values ('BX-TAX', 'BA1', '2026-06-24', -30000, 'Road tax', '2026-06-24');
-insert into bank_line_classification (id, bank_transaction_id, category_id, expected_cash_id, amount)
-values ('CL-TAX', 'BX-TAX', 'taxes', 'EC-TAX-06', -30000);
+insert into bank_line_classification (id, bank_transaction_id, category_id, expected_cash_id, amount, recorded_on)
+values ('CL-TAX', 'BX-TAX', 'taxes', 'EC-TAX-06', -30000, '2026-06-24');
 call post_to_ledger();
 select assert_equal('ARCH-5: the paid tax is relieved from the forecast', sum(amount), 0)
 from position_entry where family = 'cash' and stage = 'forecast' and category_id = 'taxes';
@@ -849,13 +1126,60 @@ select assert_equal('ARCH-5: cash plan vs actual cash for taxes in June',
     (select sum(amount_net) from plan_line where plan_version_id = 'B1' and family = 'cash' and category_id = 'taxes')
     - (select sum(amount) from position_entry where family = 'cash' and category_id = 'taxes' and date_trunc('month', cash_on) = '2026-06-01'), 0);
 insert into bank_transaction values ('BX-FEE-A', 'BA1', '2026-05-31', -150, 'Bank fee May', '2026-05-31');
-insert into bank_line_classification (id, bank_transaction_id, category_id, cost_center_id, amount)
-values ('CL-FEE-A', 'BX-FEE-A', 'bank_fees', 'ADMIN', -150);
+insert into bank_line_classification (id, bank_transaction_id, category_id, cost_center_id, amount, recorded_on)
+values ('CL-FEE-A', 'BX-FEE-A', 'bank_fees', 'ADMIN', -150, '2026-05-31');
 select assert_equal('ARCH-5: cost center ADMIN budget vs actual (plan 200, actual 150)', p.plan - a.actual, 50)
 from (select sum(amount_net) as plan from plan_line
       where plan_version_id = 'B1' and family = 'pnl' and cost_center_id = 'ADMIN') p,
      (select sum(amount) as actual from position_entry
       where family = 'cost' and stage = 'actual' and cost_center_id = 'ADMIN') a;
+rollback;
+
+-- ARCH-2: Treasury forecast a receipt before Sales was used; the invoice that later
+-- announces it names the expected-cash item, which is relieved without being edited.
+begin;
+insert into expected_cash values ('EC-CIY', 'CLIENT_X', 'revenue', 'P1', null, 121000, '2026-06-15', '2026-05-20', 'Invoice FV-2026-0100 expected');
+insert into customer_invoice values ('CIY', 'CLIENT_X', '2026-06-01', '2026-06-15', '2026-06-01', 'FV-2026-0100', 'EC-CIY');
+insert into customer_invoice_line values ('CIY-1', 'CIY', null, 'P1', 'revenue', 0, 100000, 21000);
+insert into bank_transaction values ('BX-CIY', 'BA1', '2026-06-15', 121000, 'Client X, FV-2026-0100', '2026-06-15');
+insert into payment_allocation (id, bank_transaction_id, customer_invoice_id, amount, recorded_on) values ('PAX-CIY', 'BX-CIY', 'CIY', 121000, '2026-06-15');
+select assert_equal('ARCH-2: expected cash counted until the invoice announces it', sum(amount), 121000)
+from position_as_of('2026-05-31', '2026-05-31') where family = 'cash' and project_id = 'P1' and (source_id = 'EC-CIY' or source_id = 'CIY');
+select assert_equal('ARCH-2: expected cash, invoice and payment count the receipt once', sum(amount), 121000),
+       assert_equal('ARCH-2: nothing left in forecast or open', sum(abs(amount)) filter (where stage <> 'settled'), 0)
+from (select stage, sum(amount) as amount from position_entry where family = 'cash'
+        and (source_id in ('EC-CIY', 'CIY', 'CIY-1') or source_id like 'PAX-CIY:%') group by 1) x;
+select assert_equal('ARCH-2: cash invariant holds', by_project_category + by_stage, 0) from cash_difference;
+select assert_equal('ARCH-2: expected cash is never relieved beyond its amount', count(*), 0)
+from expected_cash e
+where abs(coalesce((select sum(c.amount) from bank_line_classification c where c.expected_cash_id = e.id), 0)
+          + coalesce((select sum(l.amount_net + l.vat_amount) from customer_invoice ci
+                      join customer_invoice_line l on l.customer_invoice_id = ci.id where ci.expected_cash_id = e.id), 0)
+          - coalesce((select sum(l.amount_net + l.vat_amount) from supplier_invoice si
+                      join supplier_invoice_line l on l.supplier_invoice_id = si.id where si.expected_cash_id = e.id), 0))
+      > abs(e.amount);
+rollback;
+
+-- ARCH-5: a cost-center budget and a project budget in one plan version. April payroll's
+-- cost line is tagged PROD, and B1 plans PROD labour; project control ignores the
+-- cost-center-only line and cost-center control is one GROUP BY on cost_center_id.
+begin;
+insert into cost_center values ('PROD', 'Production');
+update payroll_cost_line set cost_center_id = 'PROD' where id = 'PC-04-E1';
+insert into plan_line (plan_version_id, family, project_id, cost_center_id, category_id, period_month, amount_net)
+values ('B1', 'pnl', null, 'PROD', 'labour', '2026-04-01', 84800);
+select assert_equal('ARCH-5: project control ignores the cost-center-only plan', coalesce(sum(plan), 0), 0),
+       assert_equal('ARCH-5: project control ignores the cost-center-only actuals', coalesce(sum(actual), 0), 0)
+from project_control('B1', '2026-05-31', '2026-05-31') where project_id is null and category_id = 'labour';
+select assert_equal('ARCH-5: P1 labour plan unchanged by a cost-center budget', plan, 120000),
+       assert_equal('ARCH-5: P1 labour actual keeps its payroll tagged with a cost center', actual, 64400)
+from project_control('B1', '2026-05-31', '2026-05-31') where project_id = 'P1' and category_id = 'labour';
+select assert_equal('ARCH-5: cost-center control, PROD plan minus actual', p.plan - a.actual, 0)
+from (select cost_center_id, sum(amount_net) as plan from plan_line
+      where plan_version_id = 'B1' and family = 'pnl' group by 1) p
+join (select cost_center_id, sum(amount) as actual from position_entry
+      where family = 'cost' and stage = 'actual' group by 1) a using (cost_center_id)
+where cost_center_id = 'PROD';
 rollback;
 
 -- ARCH-7 / STANDARDS-2: an advance paid on a supplier proforma with no order, then applied
@@ -864,7 +1188,7 @@ begin;
 insert into supplier_advance_request values
     ('ZF-77', 'SUPPLIER_C', 'P1', 'subcontracting', 12100, '2026-05-02', '2026-05-09', '2026-05-02', 'ZF-2026-77');
 insert into bank_transaction values ('BX-ZF', 'BA1', '2026-05-08', -12100, 'Subcontractor C, proforma ZF-2026-77', '2026-05-08');
-insert into payment_allocation (id, bank_transaction_id, supplier_advance_request_id, amount) values ('PAX-ZF', 'BX-ZF', 'ZF-77', 12100);
+insert into payment_allocation (id, bank_transaction_id, supplier_advance_request_id, amount, recorded_on) values ('PAX-ZF', 'BX-ZF', 'ZF-77', 12100, '2026-05-08');
 select assert_equal('ARCH-7: a paid proforma is settled, not open', sum(amount) filter (where stage = 'open'), 0),
        assert_equal('ARCH-7: a paid proforma is settled cash', sum(amount) filter (where stage = 'settled'), -12100)
 from position_entry where family = 'cash' and (source_id = 'ZF-77' or source_id like 'PAX-ZF:%');
@@ -878,6 +1202,48 @@ select assert_equal('ARCH-7: proforma, payment and invoice together cost 12 100 
 from position_entry where family = 'cash' and (source_id in ('ZF-77', 'VX-ZF-1') or source_id like 'PAX-ZF:%' or source_id like 'AAX-ZF:%');
 select assert_equal('ARCH-7: advance account cleared', sum(debit) - sum(credit), 0) from journal_line where account_code = '314';
 select assert_equal('ARCH-7: cash invariant holds', by_project_category + by_stage, 0) from cash_difference;
+rollback;
+
+-- MONEY-9: order, then a proforma for it, payment, final invoice and application (the
+-- ordinary Czech purchase flow). Total cash of the order never exceeds its gross.
+begin;
+insert into purchase_order values ('PQ1', 'SUPPLIER_A', '2026-05-01', '2026-05-01', 30);
+insert into purchase_order_line values
+    ('PQ1-1', 'PQ1', 'doors', 'P2', false, 'materials', 7, 1000, 0.21, '2026-05-20'),
+    ('PQ1-2', 'PQ1', 'frames', 'P1', false, 'materials', 3, 1000, 0.21, '2026-05-20');
+create temporary view pq1_cash as
+select stage, project_id, sum(amount) as amount from position_entry
+where family = 'cash' and (source_id like 'PQ1-%' or source_id like 'ZQ1%' or source_id like 'PAQ1%'
+                           or source_id like 'VQ1%' or source_id like 'AAQ1%')
+group by 1, 2;
+insert into supplier_advance_request values
+    ('ZQ1', 'SUPPLIER_A', 'P2', 'materials', 12100, '2026-05-02', '2026-05-09', '2026-05-02', 'ZQ-2026-1', 'PQ1');
+select assert_equal('MONEY-9: registered proforma replaces the order forecast', sum(amount), -12100),
+       assert_equal('MONEY-9: registered proforma leaves no order forecast', sum(amount) filter (where stage = 'forecast'), 0)
+from pq1_cash;
+select assert_equal('MONEY-9: cash invariant holds with a proforma for an order', by_project_category + by_stage, 0) from cash_difference;
+insert into bank_transaction values ('BQ1', 'BA1', '2026-05-08', -12100, 'Supplier A, proforma ZQ-2026-1', '2026-05-08');
+insert into payment_allocation (id, bank_transaction_id, supplier_advance_request_id, amount, recorded_on) values ('PAQ1', 'BQ1', 'ZQ1', 12100, '2026-05-08');
+select assert_equal('MONEY-9: paid proforma, order cash counted once', sum(amount), -12100),
+       assert_equal('MONEY-9: paid proforma is settled', sum(amount) filter (where stage = 'settled'), -12100)
+from pq1_cash;
+insert into goods_receipt values ('GQ1', '2026-05-20', '2026-05-20');
+insert into goods_receipt_line (id, goods_receipt_id, purchase_order_line_id, quantity) values
+    ('GQ1-1', 'GQ1', 'PQ1-1', 7), ('GQ1-2', 'GQ1', 'PQ1-2', 3);
+insert into supplier_invoice values ('VQ1', 'SUPPLIER_A', '2026-05-20', '2026-06-19', '2026-05-20', false, null, 'A-26-Q1');
+insert into supplier_invoice_line (id, supplier_invoice_id, goods_receipt_line_id, project_id, category_id, quantity, amount_net, vat_amount) values
+    ('VQ1-1', 'VQ1', 'GQ1-1', 'P2', 'materials', 7, 7000, 1470),
+    ('VQ1-2', 'VQ1', 'GQ1-2', 'P1', 'materials', 3, 3000, 630);
+insert into advance_application values ('AAQ1', 'PAQ1', 'VQ1', 12100, '2026-05-20', '2026-05-20');
+select assert_equal('MONEY-9: after the final invoice, order cash counted once', sum(amount), -12100),
+       assert_equal('MONEY-9: nothing left in forecast or open', sum(abs(amount)) filter (where stage <> 'settled'), 0)
+from (select stage, sum(amount) as amount from pq1_cash group by 1) x;
+select assert_equal('MONEY-9: cash invariant holds after the proforma is applied', by_project_category + by_stage, 0) from cash_difference;
+select assert_equal('MONEY-9: proformas for an order never exceed its gross', count(*), 0)
+from (select r.purchase_order_id from supplier_advance_request r
+      where r.purchase_order_id is not null group by 1
+      having sum(r.amount) > (select sum(round(pol.quantity * pol.unit_price * (1 + pol.vat_rate), 2))
+                              from purchase_order_line pol where pol.purchase_order_id = r.purchase_order_id)) x;
 rollback;
 
 -- ARCH-5 (Inventory part) / REDTEAM-3 (stock part): stock received without an order is an
@@ -896,6 +1262,79 @@ from journal_line where journal_entry_id = 'supplier_invoice:VX-S' and account_c
 select assert_equal('ARCH-5: reconciliation stays exact', sum(abs(difference)), 0) from reconciliation;
 rollback;
 
+-- MONEY-11: the family of an invoice line comes from its category. A capital purchase
+-- (equipment, a non-P&L category mapped to 022) and a re-invoiced material cost.
+begin;
+insert into category values ('equipment', 'cash', 'Equipment (capital purchase)');
+insert into account values ('022', 'Equipment', 'equipment', null);
+insert into supplier_invoice values ('VQ3', 'SUPPLIER_A', '2026-05-15', '2026-06-14', '2026-05-15', false, null, 'A-26-Q3');
+insert into supplier_invoice_line (id, supplier_invoice_id, project_id, category_id, quantity, amount_net, vat_amount)
+values ('VQ3-1', 'VQ3', 'P1', 'equipment', 0, 500000, 105000);
+insert into customer_invoice values ('CIQ3', 'CLIENT_X', '2026-05-26', '2026-06-09', '2026-05-26', 'FV-2026-0097');
+insert into customer_invoice_line values ('CIQ3-1', 'CIQ3', null, 'P1', 'materials', 0, 10000, 2100);
+call post_to_ledger();
+select assert_equal('MONEY-11: a capital purchase is not cost', count(*), 0)
+from position_entry where family in ('cost', 'revenue') and source_id = 'VQ3-1';
+select assert_equal('MONEY-11: a capital purchase posts to the asset account', sum(debit), 500000)
+from journal_line where journal_entry_id = 'supplier_invoice:VQ3' and account_code = '022';
+select assert_equal('MONEY-11: a capital purchase is an open payable', sum(amount), -605000)
+from position_entry where family = 'cash' and stage = 'open' and source_id = 'VQ3-1';
+select assert_equal('MONEY-11: a re-invoiced cost reduces P1 materials actual', actual, 322500 - 10000),
+       assert_equal('MONEY-11: P1 has one materials control row', (select count(*) from project_control('B1', '2026-05-31', '2026-05-31')
+                                                                    where project_id = 'P1' and category_id = 'materials'), 1)
+from position_summary('2026-05-31', '2026-05-31') where project_id = 'P1' and family = 'cost' and category_id = 'materials';
+select assert_equal('MONEY-11: reconciliation stays exact', sum(abs(difference)), 0) from reconciliation;
+select assert_equal('MONEY-11: stages still equal the typed records', difference, 0) from stage_difference;
+select assert_equal('MONEY-11: cash invariant holds', by_project_category + by_stage, 0) from cash_difference;
+-- The same capital purchase through an order: never committed or incurred cost.
+insert into purchase_order values ('PQ3', 'SUPPLIER_A', '2026-05-01', '2026-05-01', 30);
+insert into purchase_order_line values ('PQ3-1', 'PQ3', 'crane', 'P1', false, 'equipment', 1, 500000, 0.21, '2026-05-10');
+insert into goods_receipt values ('GQ3', '2026-05-10', '2026-05-10');
+insert into goods_receipt_line (id, goods_receipt_id, purchase_order_line_id, quantity) values ('GQ3-1', 'GQ3', 'PQ3-1', 1);
+select assert_equal('MONEY-11: a capital purchase order is not committed or incurred cost', count(*), 0)
+from position_entry where family = 'cost' and source_id in ('PQ3-1', 'GQ3-1');
+select assert_equal('MONEY-11: a capital purchase order is forecast cash', sum(amount), -605000)
+from position_entry where family = 'cash' and source_id = 'PQ3-1';
+select assert_equal('MONEY-11: stages still equal the typed records with a capital order', difference, 0) from stage_difference;
+rollback;
+
+-- ARCH-3: under Accounting alone, the invoice line itself says "for stock" (no order, no
+-- receipt), and a payroll recap entered as an internal document is caught.
+begin;
+insert into supplier_invoice values ('VX-S2', 'SUPPLIER_B', '2026-05-21', '2026-06-20', '2026-05-21', false, null, 'B-2026-091');
+insert into supplier_invoice_line (id, supplier_invoice_id, category_id, quantity, amount_net, vat_amount, to_stock)
+values ('VX-S2-1', 'VX-S2', 'materials', 2, 56000, 11760, true);
+call post_to_ledger();
+select assert_equal('ARCH-3: a stock purchase registered by Accounting alone is not cost', count(*), 0)
+from position_entry where family = 'cost' and source_id = 'VX-S2-1';
+select assert_equal('ARCH-3: a stock purchase registered by Accounting alone posts to stock', sum(debit), 56000)
+from journal_line where journal_entry_id = 'supplier_invoice:VX-S2' and account_code = '112';
+select assert_equal('ARCH-3: stages still equal the typed records with a stock invoice line', difference, 0) from stage_difference;
+insert into internal_document values ('PAYREC-04', '2026-04-30', '2026-05-10', 'Payroll recap April');
+insert into internal_document_line values
+    ('PAYREC-04-1', 'PAYREC-04', '521', 'labour', null, null, 84800, 0, null, null),
+    ('PAYREC-04-2', 'PAYREC-04', '331', null, null, null, 0, 84800, null, null);
+select assert_equal('ARCH-3: a payroll recap as an internal document is caught', count(*), 1)
+from internal_document_payroll_duplicate;
+rollback;
+
+-- ARCH-4 / REDTEAM-7: an FP&A management-only adjustment (imputed cost of the owner's
+-- site supervision on P1) counts as management actual, never reaches the ledger, and the
+-- reconciliation names it.
+begin;
+insert into management_adjustment values
+    ('MA-1', 'P1', null, null, 'labour', 5000, '2026-05-31', '2026-06-01', 'imputed_cost', 'Owner supervision, May');
+call post_to_ledger();
+select assert_equal('ARCH-4: a management adjustment counts as management actual', actual, 64400 + 5000)
+from position_summary('2026-05-31', '2026-06-01') where project_id = 'P1' and family = 'cost' and category_id = 'labour';
+select assert_equal('ARCH-4: a management adjustment never posts to the ledger', count(*), 0)
+from journal_entry where source_id = 'MA-1';
+select assert_equal('ARCH-4: reconciliation stays exact with a named adjustment', sum(abs(difference)), 0),
+       assert_equal('ARCH-4: reconciliation shows the adjustment', sum(adjustment) filter (where reasons = 'imputed_cost'), 5000)
+from reconciliation;
+select assert_equal('ARCH-4: stages still equal the typed records', difference, 0) from stage_difference;
+rollback;
+
 -- ARCH-8: project is optional on sales, CRM, request, stock-issue and plan records.
 begin;
 insert into opportunity values ('OPPX', 'CLIENT_X', null, 'revenue', 20000, 0.50, '2026-05-01', '2026-05-01');
@@ -912,6 +1351,72 @@ from position_entry where family = 'revenue' and stage = 'actual' and project_id
 select assert_equal('ARCH-8: reconciliation stays exact', sum(abs(difference)), 0) from reconciliation;
 select assert_equal('ARCH-8: stages still equal the typed records', difference, 0) from stage_difference;
 select assert_equal('ARCH-8: cash invariant holds', by_project_category + by_stage, 0) from cash_difference;
+rollback;
+
+-- MONEY-16: an invoice issued on 5 May for a receipt of 12 May, registered on 13 May and
+-- linked to the receipt. Between the two dates the cost counts once, never negative.
+begin;
+insert into purchase_order values ('PQ10', 'SUPPLIER_A', '2026-05-01', '2026-05-01', 30);
+insert into purchase_order_line values ('PQ10-1', 'PQ10', 'doors', 'P2', false, 'materials', 5, 2000, 0.21, '2026-05-12');
+insert into goods_receipt values ('GQ10', '2026-05-12', '2026-05-12');
+insert into goods_receipt_line (id, goods_receipt_id, purchase_order_line_id, quantity) values ('GQ10-1', 'GQ10', 'PQ10-1', 5);
+insert into supplier_invoice values ('VQ10', 'SUPPLIER_A', '2026-05-05', '2026-06-04', '2026-05-13', false, null, 'A-26-Q10');
+insert into supplier_invoice_line (id, supplier_invoice_id, goods_receipt_line_id, project_id, category_id, quantity, amount_net, vat_amount)
+values ('VQ10-1', 'VQ10', 'GQ10-1', 'P2', 'materials', 5, 10000, 2100);
+select assert_equal('MONEY-16: 8 May, invoice before receipt: no negative incurred', coalesce(incurred, 0), 0),
+       assert_equal('MONEY-16: 8 May, invoice before receipt: committed relieved', coalesce(committed, 0), 0),
+       assert_equal('MONEY-16: 8 May, invoice before receipt: cost counted once', actual, 10000)
+from position_summary('2026-05-08', '2026-05-31') where project_id = 'P2' and family = 'cost' and category_id = 'materials';
+select assert_equal('MONEY-16: 31 May, invoice after receipt: nothing left committed or incurred', coalesce(committed, 0) + coalesce(incurred, 0), 0)
+from position_summary('2026-05-31', '2026-05-31') where project_id = 'P2' and family = 'cost' and category_id = 'materials';
+select assert_equal('MONEY-16: stages still equal the typed records', difference, 0) from stage_difference;
+rollback;
+
+-- MONEY-18: 3 x 1.01 at 21 % (forecast 3.67) received and invoiced in three invoices of 1;
+-- the same on the sales side. Fully invoiced orders leave no cent in the forecast.
+begin;
+insert into purchase_order values ('PQ9', 'SUPPLIER_A', '2026-05-01', '2026-05-01', 30);
+insert into purchase_order_line values ('PQ9-1', 'PQ9', 'washers', 'P2', false, 'materials', 3, 1.01, 0.21, '2026-05-10');
+insert into goods_receipt values ('GQ9', '2026-05-10', '2026-05-10');
+insert into goods_receipt_line (id, goods_receipt_id, purchase_order_line_id, quantity) values ('GQ9-1', 'GQ9', 'PQ9-1', 3);
+insert into supplier_invoice values
+    ('VQ9A', 'SUPPLIER_A', '2026-05-11', '2026-06-10', '2026-05-11', false, null, 'A-26-Q9A'),
+    ('VQ9B', 'SUPPLIER_A', '2026-05-12', '2026-06-11', '2026-05-12', false, null, 'A-26-Q9B'),
+    ('VQ9C', 'SUPPLIER_A', '2026-05-13', '2026-06-12', '2026-05-13', false, null, 'A-26-Q9C');
+insert into supplier_invoice_line (id, supplier_invoice_id, goods_receipt_line_id, project_id, category_id, quantity, amount_net, vat_amount) values
+    ('VQ9A-1', 'VQ9A', 'GQ9-1', 'P2', 'materials', 1, 1.01, 0.21),
+    ('VQ9B-1', 'VQ9B', 'GQ9-1', 'P2', 'materials', 1, 1.01, 0.21),
+    ('VQ9C-1', 'VQ9C', 'GQ9-1', 'P2', 'materials', 1, 1.01, 0.21);
+insert into sales_order values ('SOQ9', 'CLIENT_X', 'P2', null, '2026-05-01', '2026-05-01', 14);
+insert into sales_order_line values ('SOQ9-1', 'SOQ9', 'revenue', 'Washers', 3, 1.01, 0.21, '2026-05-15');
+insert into customer_invoice values
+    ('CIQ9A', 'CLIENT_X', '2026-05-11', '2026-05-25', '2026-05-11', 'FV-2026-0091'),
+    ('CIQ9B', 'CLIENT_X', '2026-05-12', '2026-05-26', '2026-05-12', 'FV-2026-0092'),
+    ('CIQ9C', 'CLIENT_X', '2026-05-13', '2026-05-27', '2026-05-13', 'FV-2026-0093');
+insert into customer_invoice_line values
+    ('CIQ9A-1', 'CIQ9A', 'SOQ9-1', 'P2', 'revenue', 1, 1.01, 0.21),
+    ('CIQ9B-1', 'CIQ9B', 'SOQ9-1', 'P2', 'revenue', 1, 1.01, 0.21),
+    ('CIQ9C-1', 'CIQ9C', 'SOQ9-1', 'P2', 'revenue', 1, 1.01, 0.21);
+select assert_equal('MONEY-18: a fully invoiced order leaves no cent in the forecast', sum(amount), 0)
+from position_entry where family = 'cash' and stage = 'forecast' and (source_id = 'PQ9-1' or source_id like 'VQ9%');
+select assert_equal('MONEY-18: a fully invoiced sales order leaves no cent in the forecast', sum(amount), 0)
+from position_entry where family = 'cash' and stage = 'forecast' and (source_id = 'SOQ9-1' or source_id like 'CIQ9%');
+select assert_equal('MONEY-18: cash invariant holds', by_project_category + by_stage, 0) from cash_difference;
+rollback;
+
+-- MONEY-14: an order line for materials invoiced on a subcontracting line. The relief
+-- stays on the order line's category; the invariant compares at category grain.
+begin;
+insert into purchase_order values ('PQ7', 'SUPPLIER_A', '2026-05-01', '2026-05-01', 30);
+insert into purchase_order_line values ('PQ7-1', 'PQ7', 'panels', 'P2', false, 'materials', 1, 1000, 0.21, '2026-05-10');
+insert into goods_receipt values ('GQ7', '2026-05-10', '2026-05-10');
+insert into goods_receipt_line (id, goods_receipt_id, purchase_order_line_id, quantity) values ('GQ7-1', 'GQ7', 'PQ7-1', 1);
+insert into supplier_invoice values ('VQ7', 'SUPPLIER_A', '2026-05-11', '2026-06-10', '2026-05-11', false, null, 'A-26-Q7');
+insert into supplier_invoice_line (id, supplier_invoice_id, goods_receipt_line_id, project_id, category_id, quantity, amount_net, vat_amount)
+values ('VQ7-1', 'VQ7', 'GQ7-1', 'P2', 'subcontracting', 1, 1000, 210);
+select assert_equal('MONEY-14: stages equal the typed records per project and category', difference, 0) from stage_difference;
+select assert_equal('MONEY-14: P2 materials incurred relieved on the order line''s category', coalesce(sum(incurred), 0), 0)
+from position_summary('2026-05-31', '2026-05-31') where project_id = 'P2' and family = 'cost' and category_id = 'materials';
 rollback;
 
 -- MONEY-4: reliefs use the relieved record's project and category. A company-level order
@@ -947,7 +1452,7 @@ insert into purchase_order_line values
     ('PX3-1', 'PX3', 'panel', 'P1', false, 'materials', 1, 1000, 0.21, '2026-05-10'),
     ('PX3-2', 'PX3', 'panel', 'P2', false, 'materials', 1, 1000, 0.21, '2026-05-10');
 insert into bank_transaction values ('BX3A', 'BA1', '2026-05-02', -1210, 'advance PX3', '2026-05-02');
-insert into payment_allocation (id, bank_transaction_id, purchase_order_id, amount) values ('PAX3A', 'BX3A', 'PX3', 1210);
+insert into payment_allocation (id, bank_transaction_id, purchase_order_id, amount, recorded_on) values ('PAX3A', 'BX3A', 'PX3', 1210, '2026-05-02');
 insert into goods_receipt values ('GX3', '2026-05-10', '2026-05-10');
 insert into goods_receipt_line (id, goods_receipt_id, purchase_order_line_id, quantity) values
     ('GX3-1', 'GX3', 'PX3-1', 1), ('GX3-2', 'GX3', 'PX3-2', 1);
@@ -959,7 +1464,7 @@ insert into supplier_invoice_line (id, supplier_invoice_id, goods_receipt_line_i
     ('VX3B-1', 'VX3B', 'GX3-2', 'P2', 'materials', 1, 1000, 210);
 insert into advance_application values ('AAX3', 'PAX3A', 'VX3A', 1210, '2026-05-11', '2026-05-11');
 insert into bank_transaction values ('BX3B', 'BA1', '2026-05-20', -1210, 'VX3B', '2026-05-20');
-insert into payment_allocation (id, bank_transaction_id, supplier_invoice_id, amount) values ('PAX3B', 'BX3B', 'VX3B', 1210);
+insert into payment_allocation (id, bank_transaction_id, supplier_invoice_id, amount, recorded_on) values ('PAX3B', 'BX3B', 'VX3B', 1210, '2026-05-20');
 select assert_equal('MONEY-3: P1 pays its own line', sum(amount) filter (where project_id = 'P1'), -1210),
        assert_equal('MONEY-3: P2 pays its own line', sum(amount) filter (where project_id = 'P2'), -1210),
        assert_equal('MONEY-3: nothing left in forecast or open', sum(abs(amount)) filter (where stage <> 'settled'), 0)
@@ -981,6 +1486,48 @@ where stage in ('committed', 'forecast') and (source_id = 'PO5-1' or source_id l
 select assert_equal('MONEY-1: 25 Apr as known 25 Apr follows the second response', sum(amount), 45000)
 from position_as_of('2026-04-25', '2026-04-25')
 where family = 'cost' and stage = 'committed' and (source_id = 'PO5-1' or source_id like 'OR5%:%');
+rollback;
+
+-- ARCH-1 / REDTEAM-2: milestones under P1. Milestone 2 carries its sales line, its invoice,
+-- the subcontract and its invoice, and a plan line; FP&A estimates its progress, which a
+-- WIP document references.
+begin;
+insert into project_milestone values
+    ('P1-M1', 'P1', 'Milestone 1: structure', '2026-03-31'),
+    ('P1-M2', 'P1', 'Milestone 2: partitions', '2026-04-30');
+update sales_order_line set milestone_id = 'P1-M2' where id = 'SO1-M2';
+update customer_invoice_line set milestone_id = 'P1-M2' where id = 'CI2-1';
+update purchase_order_line set milestone_id = 'P1-M2' where id = 'PO3-1';
+update supplier_invoice_line set milestone_id = 'P1-M2' where id = 'VB4-1';
+update plan_line set milestone_id = 'P1-M2' where plan_version_id = 'B1' and project_id = 'P1' and period_month = '2026-04-01'
+                                            and category_id in ('revenue', 'subcontracting');
+create temporary view milestone_position as
+select project_id, milestone_id,
+       sum(amount) filter (where family = 'revenue' and stage = 'actual') as revenue_actual,
+       sum(amount) filter (where family = 'revenue' and stage = 'committed') as revenue_committed,
+       sum(amount) filter (where family = 'cost' and stage = 'actual') as cost_actual,
+       sum(amount) filter (where family = 'cost' and stage = 'committed') as cost_committed,
+       sum(amount) filter (where family = 'cash' and stage = 'settled') as cash_settled,
+       sum(amount) filter (where family = 'cash') as cash_total
+from position_as_of('2026-05-31', '2026-05-31')
+group by project_id, milestone_id;
+select assert_equal('ARCH-1: P1 milestone 2 revenue actual', revenue_actual, 300000),
+       assert_equal('ARCH-1: P1 milestone 2 contracted revenue fully invoiced', revenue_committed, 0),
+       assert_equal('ARCH-1: P1 milestone 2 cost actual (60 % of the subcontract)', cost_actual, 90000),
+       assert_equal('ARCH-1: P1 milestone 2 cost committed (40 % not yet billed)', cost_committed, 60000),
+       assert_equal('ARCH-1: P1 milestone 2 cash settled (CI2 paid in part)', cash_settled, 150000),
+       assert_equal('ARCH-1: P1 milestone 2 net cash (CI2 300 000 in, subcontract 150 000 out)', cash_total, 150000)
+from milestone_position where project_id = 'P1' and milestone_id = 'P1-M2';
+select assert_equal('ARCH-1: P1 milestone 2 plan (revenue 300 000, subcontracting 100 000)',
+    sum(amount_net) filter (where category_id = 'revenue') - sum(amount_net) filter (where category_id = 'subcontracting'), 200000)
+from plan_line where plan_version_id = 'B1' and milestone_id = 'P1-M2';
+select assert_equal('ARCH-1: milestones add up to the project', sum(cost_actual), 476900)
+from milestone_position where project_id = 'P1';
+insert into project_progress values ('PP-P1-M2', 'P1', 'P1-M2', '2026-05-31', 60, null, '2026-06-02');
+insert into internal_document values ('WIP-2026-05', '2026-05-31', '2026-06-02', 'WIP valuation, May', 'PP-P1-M2');
+select assert_equal('ARCH-1: a WIP document references FP&A''s progress estimate for its project', count(*), 1)
+from internal_document d join project_progress pp on pp.id = d.project_progress_id
+where d.id = 'WIP-2026-05' and pp.project_id = 'P1' and pp.percent_complete = 60;
 rollback;
 
 -- A received document is registered once, whichever product the customer runs:

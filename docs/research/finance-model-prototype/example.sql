@@ -80,9 +80,9 @@ insert into stock_issue values ('ISS1', 'P1', '2026-04-20', '2026-04-20');
 insert into stock_issue_line values ('ISS1-1', 'ISS1', 'steel frame', 'materials', 1, 27500);
 
 insert into request_fulfilment values
-    ('RF1', 'MR1-1', 'PO1-1', null, 6),
-    ('RF2', 'MR1-1', 'PO2-1', null, 2),
-    ('RF3', 'MR1-1', null, 'ISS1-1', 1);
+    ('RF1', 'MR1-1', 'PO1-1', null, 6, '2026-03-12'),
+    ('RF2', 'MR1-1', 'PO2-1', null, 2, '2026-03-20'),
+    ('RF3', 'MR1-1', null, 'ISS1-1', 1, '2026-04-20');
 
 -- Partial deliveries straight to site.
 insert into goods_receipt values
@@ -152,10 +152,10 @@ insert into payroll_cost_line values
     ('PC-04-E1', 'PL-04-E1', 'labour', null, null, 84800);
 -- Actual rate: March 88 000 / 160 h = 550; April 84 800 / 160 h = 530.
 insert into payroll_allocation values
-    ('PA-03-1', 'PC-03-E1', 'TS1', 40, 22000),
-    ('PA-03-2', 'PC-03-E1', 'TS2', 120, 66000),
-    ('PA-04-1', 'PC-04-E1', 'TS3', 80, 42400),
-    ('PA-04-2', 'PC-04-E1', 'TS4', 80, 42400);
+    ('PA-03-1', 'PC-03-E1', 'TS1', 40, 22000, '2026-04-10'),
+    ('PA-03-2', 'PC-03-E1', 'TS2', 120, 66000, '2026-04-10'),
+    ('PA-04-1', 'PC-04-E1', 'TS3', 80, 42400, '2026-05-10'),
+    ('PA-04-2', 'PC-04-E1', 'TS4', 80, 42400, '2026-05-10');
 
 -- Treasury: one supplier payment settles three documents, one invoice is paid in part,
 -- one customer payment settles one invoice in full and another in part,
@@ -170,19 +170,19 @@ insert into bank_transaction values
     ('BT1', 'BA1', '2026-05-20', 550000, 'Client X', '2026-05-20'),
     ('BT5', 'BA1', '2026-04-25', -25410, 'Supplier A, 50 % advance on PO5', '2026-04-25'),
     ('BT6', 'BA1', '2026-05-26', -25410, 'Supplier A, VB7 balance', '2026-05-26');
-insert into payment_allocation (id, bank_transaction_id, customer_invoice_id, supplier_invoice_id, payroll_run_id, amount) values
-    ('PAY-03A', 'BT-PAY-03A', null, null, 'PR-2026-03', 60000),
-    ('PAY-03B', 'BT-PAY-03B', null, null, 'PR-2026-03', 28000),
-    ('PAY-VB3', 'BT3', null, 'VB3', null, 40000),
-    ('PAY-04', 'BT-PAY-04', null, null, 'PR-2026-04', 84800),
-    ('PAY-VB1', 'BT2', null, 'VB1', null, 154880),
-    ('PAY-VB2', 'BT2', null, 'VB2', null, 77440),
-    ('PAY-VB2C', 'BT2', null, 'VB2C', null, 2420),
-    ('PAY-CI1', 'BT1', 'CI1', null, null, 400000),
-    ('PAY-CI2', 'BT1', 'CI2', null, null, 150000),
-    ('PAY-VB7', 'BT6', null, 'VB7', null, 25410);
-insert into payment_allocation (id, bank_transaction_id, purchase_order_id, amount) values
-    ('PAY-ADV5', 'BT5', 'PO5', 25410);
+insert into payment_allocation (id, bank_transaction_id, customer_invoice_id, supplier_invoice_id, payroll_run_id, amount, recorded_on) values
+    ('PAY-03A', 'BT-PAY-03A', null, null, 'PR-2026-03', 60000, '2026-04-12'),
+    ('PAY-03B', 'BT-PAY-03B', null, null, 'PR-2026-03', 28000, '2026-04-20'),
+    ('PAY-VB3', 'BT3', null, 'VB3', null, 40000, '2026-05-05'),
+    ('PAY-04', 'BT-PAY-04', null, null, 'PR-2026-04', 84800, '2026-05-12'),
+    ('PAY-VB1', 'BT2', null, 'VB1', null, 154880, '2026-05-15'),
+    ('PAY-VB2', 'BT2', null, 'VB2', null, 77440, '2026-05-15'),
+    ('PAY-VB2C', 'BT2', null, 'VB2C', null, 2420, '2026-05-15'),
+    ('PAY-CI1', 'BT1', 'CI1', null, null, 400000, '2026-05-20'),
+    ('PAY-CI2', 'BT1', 'CI2', null, null, 150000, '2026-05-20'),
+    ('PAY-VB7', 'BT6', null, 'VB7', null, 25410, '2026-05-26');
+insert into payment_allocation (id, bank_transaction_id, purchase_order_id, amount, recorded_on) values
+    ('PAY-ADV5', 'BT5', 'PO5', 25410, '2026-04-25');
 -- The advance is offset against the final invoice VB7 (50 820 gross).
 insert into advance_application values ('AA1', 'PAY-ADV5', 'VB7', 25410, '2026-05-12', '2026-05-12');
 
