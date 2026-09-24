@@ -1,0 +1,63 @@
+name: Railway config
+
+# Applies .railway/railway.ts to the production environment after merge.
+# The project token lives only in the `railway-production` GitHub Environment, which only `main`
+# can use, so agent PRs never see it. Destructive changes (removing services, volumes,
+# variables) fail the push run on purpose; rerun manually with "confirm destructive" checked.
+# Railway waits for this workflow (Wait for CI), so infra changes land before the app deploy.
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".railway/**"
+      - "package.json"
+      - "package-lock.json"
+  workflow_dispatch:
+    inputs:
+      confirm_destructive:
+        description: "Allow destructive changes (removes services, volumes or variables)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never cancel a running apply; a newer pending run replaces an older pending one, which is fine
+# because each apply converges to the full desired state of its commit.
+concurrency:
+  group: railway-config
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: railway-production
+    env:
+      RAILWAY_CLI_VERSION: "5.62.1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      # Dependency install scripts never see the token: it is set only on the two Railway steps.
+      - run: npm ci --ignore-scripts
+      - run: npm install --global --ignore-scripts "@railway/cli@${RAILWAY_CLI_VERSION}"
+      - name: Plan
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway config plan
+      - name: Apply
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          CONFIRM_DESTRUCTIVE: ${{ inputs.confirm_destructive }}
+        run: |
+          if [[ "$CONFIRM_DESTRUCTIVE" == "true" ]]; then
+            railway config apply --yes --confirm-destructive
+          else
+            railway config apply --yes
+          fi
