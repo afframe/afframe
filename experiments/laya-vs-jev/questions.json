@@ -1,0 +1,61 @@
+{
+  "doc_type": {
+    "type": "choice",
+    "instructions": "What kind of accounting document is this?",
+    "criteria": {
+      "invoice": "a regular invoice or tax document requesting payment (faktura, daňový doklad)",
+      "credit_note": "a credit note or corrective tax document reducing an earlier invoice (dobropis, opravný daňový doklad)",
+      "advance_invoice": "an advance or proforma invoice requesting prepayment, not a tax document (zálohová faktura, proforma)",
+      "receipt": "a cash or card receipt from a shop, restaurant or fuel station (účtenka, pokladní doklad)",
+      "payment_confirmation": "a confirmation that a payment was received, or a tax document for a received payment",
+      "other": "anything else: contract, reminder, statement, order, delivery note"
+    }
+  },
+  "currency": {
+    "type": "choice",
+    "instructions": "In which currency is the total amount of this document?",
+    "criteria": {
+      "CZK": "Czech koruna (Kč, CZK)",
+      "EUR": "euro (€, EUR)",
+      "USD": "US dollar ($, USD)",
+      "other": "any other currency"
+    }
+  },
+  "payment_method": {
+    "type": "choice",
+    "instructions": "How is this document paid or to be paid?",
+    "criteria": {
+      "bank_transfer": "bank transfer to an account number or IBAN (převodem)",
+      "card": "payment card, online card payment, already charged to a card",
+      "cash": "cash (hotově)",
+      "direct_debit": "direct debit or automatic collection (inkaso)",
+      "not_stated": "the document does not say"
+    }
+  },
+  "expense_category": {
+    "type": "choice",
+    "instructions": "What is mainly being billed in this document?",
+    "criteria": {
+      "professional_services": "accounting, legal, consulting, IT or other professional services",
+      "software_subscriptions": "software licences, SaaS, cloud, hosting, domains",
+      "goods_materials": "physical goods, materials, equipment, office supplies",
+      "rent_energy": "rent, service charges, electricity, gas, water",
+      "telecom": "phone, mobile, internet connectivity",
+      "travel_transport": "travel, accommodation, flights, taxi, fuel, parking, transport",
+      "marketing": "advertising, marketing, events, printing",
+      "other": "anything else"
+    }
+  },
+  "reverse_charge": {
+    "type": "noul",
+    "instructions": "Does the document say that VAT is not charged because of reverse charge (přenesení daňové povinnosti, reverse charge, VAT to be accounted for by the recipient)?"
+  },
+  "vat_charged": {
+    "type": "noul",
+    "instructions": "Does the document charge VAT (DPH) as a separate amount?"
+  },
+  "overdue_or_reminder": {
+    "type": "noul",
+    "instructions": "Is this a payment reminder or does it say that a payment is overdue?"
+  }
+}

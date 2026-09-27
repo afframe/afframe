@@ -1,0 +1,5 @@
+# Outputs contain client file names and answers; keep them out of the repo.
+out/
+results/
+*.csv
+.venv/
