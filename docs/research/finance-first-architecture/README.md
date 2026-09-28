@@ -2,6 +2,8 @@
 
 A self-contained paper in nine files. Currency: CZK. Date: September 2026.
 
+> **Status: research and proposal, not a final or approved design.** The decisions, domain boundaries and data model here are inputs for review. Nothing in this folder is binding until it is confirmed.
+
 ## The question
 
 How should a finance-first platform, whose products each sell alone, keep every money figure (plan, commitment, incurred cost, accounting actual and cash) consistent and traceable, without double counting and without assuming one shared table?
