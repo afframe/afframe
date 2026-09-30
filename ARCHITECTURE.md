@@ -12,7 +12,10 @@ afframe/
 │   ├── workflows/             # ci, claude, claude-code-review
 │   ├── rulesets/main.json     # Ruleset applied to the default branch
 │   └── dependabot.yml         # Updates for pinned actions and base images
+├── .conductor/settings.toml   # Conductor: dev stack run button and archive cleanup
+├── compose.dev.yml            # Dev stack per workspace
 ├── scripts/ci/                # repo-lint.sh (gate), deploy-gate.sh (+ tests)
+├── scripts/dev/               # stack.sh (+ tests)
 └── CLAUDE.md
 ```
 
@@ -70,11 +73,12 @@ Postgres 18. Not provisioned yet; it arrives with the VPS stack (section 9). Sch
 ## 8. Development & Testing Environment
 
 - Local gate: `bash scripts/ci/repo-lint.sh` (Docker required).
+- Dev stack per Conductor workspace: `compose.dev.yml` (placeholder + `postgres:18`) through `scripts/dev/stack.sh`, one compose project `afframe-<workspace>` each. On Hleb's Mac it runs on the Dev Docker daemon on oracle-vps. No per-PR preview environments.
 - Service tests: `docker compose -p <name> -f compose.ci.yml run --rm test` once a service defines them.
 
 ## 9. Future Considerations / Roadmap
 
-- Production on the VPS: images on GHCR, deploy from `main` with the no-deploy gate, Postgres 18 with off-site backups and point-in-time recovery, PR preview environments isolated from production.
+- Production on the VPS: images on GHCR, deploy from `main` with the no-deploy gate, Postgres 18 with off-site backups and point-in-time recovery.
 - Replace `apps/placeholder` with the React app; choose the backend language.
 
 ## 10. Project Identification

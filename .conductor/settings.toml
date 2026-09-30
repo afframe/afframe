@@ -1,0 +1,11 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+# Each workspace runs its own dev stack on its own ports (scripts/dev/stack.sh).
+run_mode = "concurrent"
+archive = "bash scripts/dev/stack.sh down"
+
+[scripts.run.dev]
+command = "bash scripts/dev/stack.sh up"
+icon = "server"
+available_in = ["local"]

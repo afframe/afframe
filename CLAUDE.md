@@ -8,11 +8,13 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and merge qu
 - `.github/workflows/`: `ci.yml` (the gate), `claude.yml` and `claude-code-review.yml` (on demand).
 - `.github/rulesets/main.json`: the `main` ruleset as applied to GitHub (keep in sync).
 - `scripts/ci/`: shell used by CI and the local gate. `deploy-gate.sh` holds the no-deploy rule for the upcoming VPS deploy workflow.
+- `compose.dev.yml`, `scripts/dev/stack.sh`, `.conductor/settings.toml`: the per-workspace dev stack.
 
 ## Commands
 
-- Gate: `bash scripts/ci/repo-lint.sh` (actionlint, shellcheck, gitleaks, deploy-gate tests; needs a running Docker daemon).
-- Deploy-gate tests alone: `bash scripts/ci/deploy-gate.test.sh`.
+- Gate: `bash scripts/ci/repo-lint.sh` (actionlint, shellcheck, gitleaks, every `*.test.sh`; needs a running Docker daemon).
+- One script's tests: `bash scripts/ci/deploy-gate.test.sh`, `bash scripts/dev/stack.test.sh`.
+- Dev stack: Conductor Run → `dev`, or `CONDUCTOR_PORT=<port> bash scripts/dev/stack.sh up`; archive runs `stack.sh down`. On Hleb's Mac, Docker points at the Dev Docker daemon on oracle-vps (configured outside this repo, don't change it); published ports appear on `localhost`. Web on `$CONDUCTOR_PORT`, Postgres on `+1` (user, password and database `afframe`).
 
 ## Shipping
 
@@ -30,7 +32,7 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and merge qu
 ## Gotchas
 
 - Secrets never go in git or in `VITE_*` or other build-time variables (those end up in public bundles).
-- Preview environments get a fresh, empty Postgres. Seed from the service, never from production.
+- No per-PR preview environments: test on the dev stack; CI tests the built image.
 
 ## Database changes
 

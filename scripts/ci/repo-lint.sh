@@ -27,5 +27,7 @@ if [[ -z "${CI:-}" ]]; then
   docker run --rm "${as_me[@]}" -v "$PWD:/repo" -w /repo "$GITLEAKS_IMAGE" git --pre-commit --no-banner --redact /repo
 fi
 
-echo "== deploy-gate tests"
-bash scripts/ci/deploy-gate.test.sh
+echo "== script tests"
+while IFS= read -r test_script; do
+  bash "$test_script"
+done < <(git ls-files '*.test.sh')
