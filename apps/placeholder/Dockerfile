@@ -1,5 +1,4 @@
-# TEMPORARY pipeline fixture, no application code. Delete this folder together with the
-# `placeholder` block in .railway/railway.ts (see docs/railway.md, "Remove the placeholder").
+# TEMPORARY pipeline fixture, no application code. Delete this folder when the real web app lands.
 FROM nginx:1.30.5-alpine
 ENV PORT=8080
 COPY default.conf.template /etc/nginx/templates/default.conf.template

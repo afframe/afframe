@@ -1,4 +1,4 @@
-# Keeps SHA-pinned actions, the Railway SDK and service base images current.
+# Keeps SHA-pinned actions and service base images current.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -8,10 +8,6 @@ updates:
     groups:
       actions:
         patterns: ["*"]
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
   - package-ecosystem: docker
     directories: ["/apps/*"]
     schedule:

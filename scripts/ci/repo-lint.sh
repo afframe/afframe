@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Language-agnostic repo checks, shared by CI and the local gate (`npm run preflight`).
+# Language-agnostic repo checks, shared by CI and the local gate.
 # Needs Docker. Tool versions are pinned here and nowhere else.
 set -euo pipefail
 

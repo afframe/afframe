@@ -5,17 +5,9 @@
   },
   "permissions": {
     "allow": [
-      "Bash(railway status:*)",
-      "Bash(railway logs:*)",
-      "Bash(railway list:*)",
-      "Bash(railway whoami:*)",
-      "Bash(railway metrics:*)",
-      "Bash(railway config plan:*)",
-      "Bash(npm run preflight)"
+      "Bash(bash scripts/ci/repo-lint.sh)"
     ],
     "deny": [
-      "Bash(railway delete:*)",
-      "Bash(railway down:*)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)"
     ]

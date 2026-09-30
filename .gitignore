@@ -6,9 +6,6 @@
 .claude/worktrees/
 CLAUDE.local.md
 
-# Dependencies
-node_modules/
-
 # Secrets never go to this public repo
 .env
 .env.*

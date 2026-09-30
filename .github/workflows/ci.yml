@@ -3,13 +3,9 @@ name: CI
 # Language-agnostic gate. It knows Docker, Compose and Postgres, never a language toolchain.
 # - `pull_request`: fast feedback; stale runs of the same PR are cancelled.
 # - `merge_group`: the merge queue tests the exact commit that lands on main.
-# - `push` to main: Railway's "Wait for CI" needs a push-triggered workflow. The merge queue
-#   already tested this SHA, so the push run only reports (seconds, keeps deploys fast).
 on:
   pull_request:
   merge_group:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -40,7 +36,6 @@ jobs:
           fi
 
   repo-lint:
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,7 +46,7 @@ jobs:
 
   build:
     needs: detect
-    if: github.event_name != 'push' && needs.detect.outputs.services != '[]'
+    if: needs.detect.outputs.services != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -71,7 +66,7 @@ jobs:
 
   test:
     needs: detect
-    if: github.event_name != 'push' && needs.detect.outputs.has_compose_ci == 'true'
+    if: needs.detect.outputs.has_compose_ci == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

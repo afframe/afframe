@@ -2,7 +2,7 @@
 # Decides whether a push to main may deploy. Reads lines on stdin:
 #   label:<name>   title:<pr title>   message:<commit message>
 # Exits 1 when any label is `no-deploy` or any title/message contains `[no deploy]`
-# (case-insensitive). Railway's Wait for CI skips a deploy when a workflow fails.
+# (case-insensitive). The VPS deploy workflow will call this before deploying.
 set -euo pipefail
 
 reason=""
