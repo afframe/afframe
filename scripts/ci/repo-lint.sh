@@ -20,7 +20,9 @@ docker run --rm "${as_me[@]}" -v "$PWD:/repo" -w /repo "$ZIZMOR_IMAGE" --offline
 echo "== compose files"
 compose_home="$(mktemp -d)"
 mkdir -p "$compose_home/env" && touch "$compose_home/env/infra.env"
-AFFRAME_HOME="$compose_home" docker compose -f deploy/compose.prod.yml config -q
+AFFRAME_HOME="$compose_home" docker compose -f deploy/compose.prod.yml config --format json \
+  | jq -e '.services.postgres.volumes[] | select(.source == "postgres-data" and .target == "/var/lib/postgresql")' > /dev/null \
+  || { echo "postgres must keep its data in the postgres-data volume" >&2; exit 1; }
 WEB_PORT=1 DB_PORT=2 docker compose -f compose.dev.yml config -q
 rm -rf "$compose_home"
 
