@@ -39,6 +39,7 @@ services:
       POSTGRES_DB: afframe
       PGBACKREST_STANZA: afframe
       PGBACKREST_PG1_PATH: /var/lib/postgresql/18/docker
+      PGBACKREST_PG1_USER: afframe
       PGBACKREST_REPO1_RETENTION_FULL: "4"
       PGBACKREST_START_FAST: "y"
       PGBACKREST_PROCESS_MAX: "2"

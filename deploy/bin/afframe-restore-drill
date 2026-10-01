@@ -12,6 +12,7 @@ pgbackrest_env=(
   --env-file "$AFFRAME_HOME/env/infra.env"
   -e PGBACKREST_STANZA=afframe
   -e PGBACKREST_PG1_PATH=/var/lib/postgresql/18/docker
+  -e PGBACKREST_PG1_USER=afframe
   -e PGBACKREST_LOG_PATH=/tmp
   -e PGBACKREST_LOCK_PATH=/tmp/pgbackrest
   -v afframe-pgbackrest:/var/lib/pgbackrest:ro
