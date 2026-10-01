@@ -52,6 +52,7 @@ Postgres 18. Not provisioned yet; it arrives with the VPS stack (section 9). Sch
 | Integration | Purpose | Credential |
 |---|---|---|
 | Claude GitHub App + `anthropics/claude-code-action` | On-demand review and `@claude` | `CLAUDE_CODE_OAUTH_TOKEN` repo secret |
+| CodeRabbit GitHub App | Automatic review when a PR is ready (`.coderabbit.yaml`), advisory | app installed on the org |
 | Dependabot | Keeps pinned versions current | built in |
 
 ## 6. Deployment & Infrastructure
