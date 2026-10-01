@@ -13,9 +13,6 @@ services:
       - "${AFFRAME_HTTP_PORT:-80}:80"
       - "${AFFRAME_HTTPS_PORT:-443}:443"
     volumes:
-  # Postgres data. Never `docker compose down -v` on afframe-vps: it deletes this volume.
-  postgres-data:
-    name: afframe-postgres-data
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ${AFFRAME_HOME:?}/traefik/dynamic:/etc/traefik/dynamic:ro
       - ${AFFRAME_HOME:?}/tls:/etc/traefik/tls:ro
@@ -67,6 +64,9 @@ services:
       retries: 10
 
 volumes:
+  # Postgres data. Never `docker compose down -v` on afframe-vps: it deletes this volume.
+  postgres-data:
+    name: afframe-postgres-data
   # pgBackRest working directory (and the repository itself when PGBACKREST_REPO1_TYPE=posix, as in
   # deploy/test/integration.sh). A named volume so it belongs to the postgres user.
   pgbackrest:
