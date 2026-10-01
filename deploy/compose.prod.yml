@@ -5,7 +5,7 @@ name: afframe
 
 services:
   traefik:
-    image: traefik:v3.7.13
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
     container_name: afframe-traefik
     restart: unless-stopped
     mem_limit: 256m
@@ -13,6 +13,9 @@ services:
       - "${AFFRAME_HTTP_PORT:-80}:80"
       - "${AFFRAME_HTTPS_PORT:-443}:443"
     volumes:
+  # Postgres data. Never `docker compose down -v` on afframe-vps: it deletes this volume.
+  postgres-data:
+    name: afframe-postgres-data
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
       - ${AFFRAME_HOME:?}/traefik/dynamic:/etc/traefik/dynamic:ro
       - ${AFFRAME_HOME:?}/tls:/etc/traefik/tls:ro
@@ -54,7 +57,7 @@ services:
       - -c
       - archive_timeout=60
     volumes:
-      - ${AFFRAME_HOME:?}/postgres:/var/lib/postgresql
+      - postgres-data:/var/lib/postgresql
       - pgbackrest:/var/lib/pgbackrest
     networks: [db]
     healthcheck:

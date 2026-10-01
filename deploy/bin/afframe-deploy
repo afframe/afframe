@@ -31,7 +31,7 @@ checkout() {
 }
 
 prepare() {
-  mkdir -p "$AFFRAME_HOME"/{env,tls,state,traefik/dynamic,postgres}
+  mkdir -p "$AFFRAME_HOME"/{env,tls,state,traefik/dynamic}
   if [[ -f /etc/afframe/vault.env ]]; then
     set -a
     # shellcheck disable=SC1091
