@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Afframe web apps, pre-users v0. This document covers what exists today: the CI gate and the merge queue. Hosting and application components are added here as they land.
+Afframe web apps, pre-users v0. This document covers what exists today: the CI gate. Hosting and application components are added here as they land.
 
 ## 1. Project Structure
 
@@ -24,9 +24,7 @@ afframe/
 ```
 agents / developer ──PR──► GitHub (afframe/afframe, public)
                               │  ci.yml on pull_request (required check `ci`)
-                              ▼
-                         merge queue ──merge_group──► ci.yml on the exact merge commit
-                              │ squash
+                              │ squash merge
                               ▼
                             main   (deploy to the VPS: not built yet, see section 9)
 ```
@@ -60,7 +58,7 @@ Postgres 18. Not provisioned yet; it arrives with the VPS stack (section 9). Sch
 
 - **Hosting:** self-hosted VPS (Hostinger KVM 2), not wired yet.
 - **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `repo-lint`, `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`).
-- **Branch protection:** ruleset on the default branch: PR required, `ci` required, squash only, merge queue (ALLGREEN, 5 builds), linear history, no deletion or force-push, no bypass actors.
+- **Branch protection:** ruleset on the default branch: PR required, `ci` required, squash only, linear history, no deletion or force-push, no bypass actors.
 
 ## 7. Security Considerations
 
@@ -86,7 +84,3 @@ Postgres 18. Not provisioned yet; it arrives with the VPS stack (section 9). Sch
 - **Repository:** https://github.com/afframe/afframe
 - **Owner:** Hleb Tkachenko
 - **Date of last update:** 2026-09-30
-
-## 11. Glossary / Acronyms
-
-- **Merge queue:** GitHub feature that tests each PR on top of the latest `main` before merging.

@@ -1,18 +1,17 @@
 name: CI
 
 # Language-agnostic gate. It knows Docker, Compose and Postgres, never a language toolchain.
-# - `pull_request`: fast feedback; stale runs of the same PR are cancelled.
-# - `merge_group`: the merge queue tests the exact commit that lands on main.
+# Runs on every pull request; a stale run of the same PR is cancelled. No merge queue: a green PR
+# merges straight to main.
 on:
   pull_request:
-  merge_group:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   detect:
