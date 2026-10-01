@@ -31,7 +31,7 @@ checkout() {
 }
 
 prepare() {
-  mkdir -p "$AFFRAME_HOME"/{env,tls,state,traefik/dynamic,postgres,pgbackrest}
+  mkdir -p "$AFFRAME_HOME"/{env,tls,state,traefik/dynamic,postgres}
   if [[ -f /etc/afframe/vault.env ]]; then
     set -a
     # shellcheck disable=SC1091
@@ -42,7 +42,7 @@ prepare() {
   cp "$REPO"/deploy/traefik/dynamic/*.yml "$AFFRAME_HOME/traefik/dynamic/"
   log "infrastructure"
   compose up -d --build --wait --quiet-pull
-  docker exec -u postgres afframe-postgres pgbackrest stanza-create > /dev/null
+  docker exec -u postgres afframe-postgres pgbackrest stanza-create
 }
 
 # deploy_service <service> <image> <migrate: yes|no>

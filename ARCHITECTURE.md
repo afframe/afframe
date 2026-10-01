@@ -60,6 +60,9 @@ Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only
 |---|---|---|
 | Claude GitHub App + `anthropics/claude-code-action` | On-demand review and `@claude` | `CLAUDE_CODE_OAUTH_TOKEN` repo secret |
 | CodeRabbit GitHub App | Automatic review when a PR is ready (`.coderabbit.yaml`), advisory | app installed on the org |
+| Vault on oracle-vps | Runtime secrets of afframe-vps (`secret/afframe/prod/{infra,app}`) | read-only token on the host |
+| Cloudflare | DNS and proxy for `afframe.com`, Origin CA certificate, R2 bucket for pgBackRest | in Vault |
+| Better Stack | Uptime check, heartbeats, status page | heartbeat URLs in Vault |
 | Dependabot | Keeps pinned versions current | built in |
 
 ## 6. Deployment & Infrastructure

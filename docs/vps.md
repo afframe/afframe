@@ -25,8 +25,7 @@ Host layout, all owned by the `deploy` user:
 ├── tls/origin.{crt,key}  # Cloudflare Origin CA certificate, from Vault
 ├── traefik/dynamic/      # tls.yml + one route file per service, written by afframe-deploy
 ├── state/<service>       # current image, colour, previous image
-├── postgres/             # Postgres data
-└── pgbackrest/           # pgBackRest working directory
+└── postgres/             # Postgres data (pgBackRest's working directory is the volume afframe-pgbackrest)
 ```
 
 ## Deploy

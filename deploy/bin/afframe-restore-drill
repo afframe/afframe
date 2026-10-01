@@ -14,7 +14,7 @@ pgbackrest_env=(
   -e PGBACKREST_PG1_PATH=/var/lib/postgresql/18/docker
   -e PGBACKREST_LOG_PATH=/tmp
   -e PGBACKREST_LOCK_PATH=/tmp/pgbackrest
-  -v "$AFFRAME_HOME/pgbackrest:/var/lib/pgbackrest:ro"
+  -v afframe-pgbackrest:/var/lib/pgbackrest:ro
   -v "$name:/var/lib/postgresql"
 )
 
@@ -26,11 +26,12 @@ cleanup() {
 drill() {
   cleanup
   log "restore into $name"
+  # Called with `|| code=$?`, so errexit is off in here: every step returns on failure itself.
   docker run --rm "${pgbackrest_env[@]}" -u postgres afframe-postgres:local \
-    sh -c 'mkdir -m 700 -p "$PGBACKREST_PG1_PATH" && pgbackrest restore'
+    sh -c 'mkdir -m 700 -p "$PGBACKREST_PG1_PATH" && pgbackrest restore' || return 1
   # archive_mode off: the drill must never push WAL into the production repository.
   docker run -d --name "$name" "${pgbackrest_env[@]}" afframe-postgres:local \
-    postgres -c archive_mode=off > /dev/null
+    postgres -c archive_mode=off > /dev/null || return 1
 
   log "wait for recovery to finish"
   local i
@@ -42,7 +43,7 @@ drill() {
   done
   ((i <= 300)) || { docker logs --tail 50 "$name" >&2; return 1; }
   local tables
-  tables="$(docker exec "$name" psql -U afframe -d afframe -Atc "select count(*) from pg_class")"
+  tables="$(docker exec "$name" psql -U afframe -d afframe -Atc "select count(*) from pg_class")" || return 1
   ((tables > 0)) || return 1
   log "restore ok: afframe database answers ($tables relations)"
 }
