@@ -93,8 +93,9 @@ jobs:
           docker compose -p "$project" -f compose.ci.yml run --rm test
 
   # The only required status check. Skipped jobs count as success; failed or cancelled ones fail it.
+  # Not run when the whole run is cancelled (a newer push replaced it), so no stale red `ci`.
   ci:
-    if: always()
+    if: ${{ !cancelled() }}
     needs: [detect, pr-title, repo-lint, build, test]
     runs-on: ubuntu-latest
     steps:
