@@ -1,0 +1,22 @@
+# Dev stack for one Conductor workspace, started by scripts/dev/stack.sh (never `docker compose up`
+# without -p). On Hleb's Mac, docker talks to the Dev Docker daemon on oracle-vps and published
+# ports show up on the Mac's localhost. Dev only: no restart policies, throwaway data.
+services:
+  placeholder:
+    build: apps/placeholder
+    ports:
+      - "${WEB_PORT:?}:8080"
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: afframe
+      POSTGRES_PASSWORD: afframe
+      POSTGRES_DB: afframe
+    ports:
+      - "${DB_PORT:?}:5432"
+    volumes:
+      - postgres:/var/lib/postgresql
+
+volumes:
+  postgres:
