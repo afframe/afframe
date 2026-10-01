@@ -1,6 +1,6 @@
 # Afframe web apps
 
-Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and merge queue exist; the apps and the deploy to the VPS do not yet. Frontend will be React, the database is Postgres, the backend language is not chosen. Keep everything outside `apps/<name>/` language-agnostic.
+Public monorepo for the Afframe web apps. Pre-users v0: the CI gate exists; the apps and the deploy to the VPS do not yet. Frontend will be React, the database is Postgres, the backend language is not chosen. Keep everything outside `apps/<name>/` language-agnostic.
 
 ## Layout
 
@@ -19,7 +19,7 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and merge qu
 ## Shipping
 
 - Small PRs, one concern each, open for hours not days. Draft until ready.
-- `ci` is the only required check. Merge through the queue ("Merge when ready"), squash only. No one can bypass the ruleset.
+- `ci` is the only required check and must stay fast (about a minute). Squash merge once it is green; no merge queue. No one can bypass the ruleset.
 - No deploy yet: production moves to the self-hosted VPS (see `ARCHITECTURE.md`, section 9).
 - AI review on demand: label `claude-review`, or comment `@claude`. Never required.
 
