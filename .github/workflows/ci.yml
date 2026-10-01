@@ -10,8 +10,10 @@ on:
 permissions:
   contents: read
 
+# `edited` runs (title or body changes, e.g. a bot appending to the body) get their own group so
+# they never cancel the run of a push; a newer run of the same kind still replaces an older one.
 concurrency:
-  group: ci-${{ github.event.pull_request.number }}
+  group: ci-${{ github.event.pull_request.number }}-${{ github.event.action == 'edited' }}
   cancel-in-progress: true
 
 jobs:
