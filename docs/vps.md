@@ -26,8 +26,10 @@ Host layout, all owned by the `deploy` user:
 ├── tls/origin.{crt,key}  # Cloudflare Origin CA certificate, from Vault
 ├── traefik/dynamic/      # tls.yml + one route file per service, written by afframe-deploy
 ├── state/<service>       # current image, colour, previous image
-└── postgres/             # Postgres data (pgBackRest's working directory is the volume afframe-pgbackrest)
+└── dumps/                # only with a posix pgBackRest repo (tests); in production dumps go to R2
 ```
+
+Postgres data lives in the Docker volume `afframe-postgres-data`, pgBackRest's working directory in `afframe-pgbackrest`. Never run `docker compose down -v` on afframe-vps: it deletes both.
 
 ## Deploy
 
@@ -96,7 +98,7 @@ docker stop afframe-postgres
 docker run --rm -u postgres --env-file /srv/afframe/env/infra.env \
   -e PGBACKREST_STANZA=afframe -e PGBACKREST_PG1_PATH=/var/lib/postgresql/18/docker -e PGBACKREST_PG1_USER=afframe \
   -e PGBACKREST_LOG_PATH=/tmp -e PGBACKREST_LOCK_PATH=/tmp/pgbackrest \
-  -v /srv/afframe/postgres:/var/lib/postgresql afframe-postgres:local \
+  -v afframe-postgres-data:/var/lib/postgresql afframe-postgres:local \
   pgbackrest restore --delta --type=time --target="2026-10-01 12:00:00+00" --target-action=promote
 docker start afframe-postgres
 ```

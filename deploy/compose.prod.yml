@@ -5,7 +5,7 @@ name: afframe
 
 services:
   traefik:
-    image: traefik:v3.7.13
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
     container_name: afframe-traefik
     restart: unless-stopped
     mem_limit: 256m
@@ -54,7 +54,7 @@ services:
       - -c
       - archive_timeout=60
     volumes:
-      - ${AFFRAME_HOME:?}/postgres:/var/lib/postgresql
+      - postgres-data:/var/lib/postgresql
       - pgbackrest:/var/lib/pgbackrest
     networks: [db]
     healthcheck:
@@ -64,6 +64,9 @@ services:
       retries: 10
 
 volumes:
+  # Postgres data. Never `docker compose down -v` on afframe-vps: it deletes this volume.
+  postgres-data:
+    name: afframe-postgres-data
   # pgBackRest working directory (and the repository itself when PGBACKREST_REPO1_TYPE=posix, as in
   # deploy/test/integration.sh). A named volume so it belongs to the postgres user.
   pgbackrest:
