@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end test of the production stack on a local Docker daemon: a Vault dev server and a local
 # registry stand in for oracle-vps Vault and GHCR. Covers afframe-deploy (deploy, blue/green
-# switch, failed health check, rollback, image validation), afframe-backup, afframe-health and
-# afframe-restore-drill. Uses the committed HEAD. Never run it on afframe-vps: it uses the same
+# switch, failed health check, rollback, image validation), afframe-backup, afframe-health,
+# afframe-dump and afframe-restore-drill. Uses the committed HEAD. Never run it on afframe-vps: it uses the same
 # container names. Run: bash deploy/test/integration.sh (nightly in CI).
 set -euo pipefail
 
@@ -59,6 +59,7 @@ jq -n --rawfile cert "$work/origin.crt" --rawfile key "$work/origin.key" '{data:
   POSTGRES_PASSWORD: "integration",
   PGBACKREST_REPO1_TYPE: "posix", PGBACKREST_REPO1_PATH: "/var/lib/pgbackrest",
   PGBACKREST_REPO1_CIPHER_TYPE: "aes-256-cbc", PGBACKREST_REPO1_CIPHER_PASS: "integration",
+  DUMP_CRYPT_PASSWORD: "integration",
   ORIGIN_CERT_PEM: $cert, ORIGIN_KEY_PEM: $key}}' \
   | curl -fsS -H "X-Vault-Token: $VAULT_TOKEN" --data @- "$VAULT_ADDR/v1/secret/data/afframe/prod/infra" > /dev/null
 curl -fsS -H "X-Vault-Token: $VAULT_TOKEN" --data '{"data": {"GREETING": "hello"}}' \
@@ -105,6 +106,9 @@ check "full backup" "$bin/afframe-backup" full
 psql_prod "insert into drill values (43); select pg_switch_wal()" > /dev/null
 check "diff backup" "$bin/afframe-backup" diff
 check "health ok" "$bin/afframe-health"
+check "nightly dump" "$bin/afframe-dump"
+check "dump stored encrypted" test "$(find "$AFFRAME_HOME/dumps" -type f | wc -l)" -eq 2
+check "no plaintext dump" fails grep -rqa PGDMP "$AFFRAME_HOME/dumps"
 check "restore drill" "$bin/afframe-restore-drill"
 
 if ((failures > 0)); then
