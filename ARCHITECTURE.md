@@ -14,7 +14,7 @@ afframe/
 │   └── dependabot.yml         # Updates for pinned actions and base images
 ├── .conductor/settings.toml   # Conductor: dev stack run button and archive cleanup
 ├── compose.dev.yml            # Dev stack per workspace
-├── scripts/ci/                # repo-lint.sh (gate), deploy-gate.sh (+ tests)
+├── scripts/ci/                # repo-lint.sh (gate), pr-title.sh, deploy-gate.sh, deploy-services.sh, trivy-scan.sh (+ tests)
 ├── scripts/dev/               # stack.sh (+ tests)
 ├── deploy/                    # Production on afframe-vps: compose, Traefik, Postgres image, host scripts
 ├── docs/vps.md                # afframe-vps runbook
@@ -69,8 +69,8 @@ Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only
 
 - **Hosting:** afframe-vps, Hostinger KVM 2 (2 vCPU, 8 GB), Ubuntu 24.04 LTS, Docker. Traefik routes by file (no Docker socket) behind Cloudflare (Full strict, Origin CA certificate). Apps deploy blue/green by image digest with a `/health` gate and one-command rollback (`deploy/bin/afframe-deploy`). Runbook and host setup: `docs/vps.md`.
 - **CD:** `deploy.yml` on every push to `main`: `deploy-gate.sh` (label `no-deploy` / `[no deploy]` skips; API errors fail closed), `deploy-services.sh` (changed services), build and push `ghcr.io/afframe/afframe/<service>:sha-<sha>` with a provenance attestation, then `afframe-deploy` over Tailscale SSH. No GitHub secrets; enabled by the repository variable `AFFRAME_VPS_ENABLED`.
-- **Monitoring:** Better Stack free plan: uptime check of `/health`, heartbeats from the backup, health and restore-drill timers, status page.
-- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `pr-title` (Conventional Commits), `repo-lint` (actionlint, zizmor, shellcheck, gitleaks, script tests), `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`). Slow checks run outside `ci`: `Deploy integration` (nightly, and advisory on PRs touching `deploy/`) and `Security scans` (nightly CodeQL for workflows, Trivy for the repo and images, OpenSSF Scorecard; findings in the Security tab).
+- **Monitoring:** Better Stack free plan: uptime check of `/health`, heartbeats from the backup, dump, health and restore-drill timers, status page.
+- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `pr-title` (Conventional Commits), `repo-lint` (actionlint, zizmor, `docker compose config` of the compose files, shellcheck, gitleaks, script tests), `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`). Slow checks run outside `ci`: `Deploy integration` (nightly, and advisory on PRs touching `deploy/`) and `Security scans` (nightly CodeQL for workflows, Trivy for the repo and images, OpenSSF Scorecard; findings in the Security tab).
 - **Branch protection:** ruleset on the default branch: PR required, `ci` required, squash only, linear history, no deletion or force-push, no bypass actors.
 
 ## 7. Security Considerations
@@ -96,4 +96,4 @@ Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only
 
 - **Repository:** https://github.com/afframe/afframe
 - **Owner:** Hleb Tkachenko
-- **Date of last update:** 2026-09-30
+- **Date of last update:** 2026-10-01
