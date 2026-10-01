@@ -7,14 +7,15 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and the prod
 - `apps/<name>/`: one deployable service each, with its own `Dockerfile`. `apps/placeholder/` is a temporary fixture; delete it when the real web app lands.
 - `.github/workflows/`: `ci.yml` (the gate), `claude.yml` and `claude-code-review.yml` (on demand).
 - `.github/rulesets/main.json`: the `main` ruleset as applied to GitHub (keep in sync).
-- `scripts/ci/`: shell used by CI and the local gate. `deploy-gate.sh` holds the no-deploy rule for the upcoming VPS deploy workflow.
+- `.github/workflows/deploy.yml`: build changed services to GHCR and deploy `main` to afframe-vps. `deploy-integration.yml`: slow end-to-end test of `deploy/` (nightly).
+- `scripts/ci/`: shell used by CI, the deploy workflow and the local gate (`deploy-gate.sh` no-deploy switch, `deploy-services.sh` what changed).
 - `compose.dev.yml`, `scripts/dev/stack.sh`, `.conductor/settings.toml`: the per-workspace dev stack.
 - `deploy/`: production on afframe-vps (Traefik, Postgres 18 + pgBackRest, blue/green deploy script, backup, health and restore-drill scripts, systemd units). Runbook: `docs/vps.md`.
 
 ## Commands
 
 - Gate: `bash scripts/ci/repo-lint.sh` (actionlint, zizmor, shellcheck, gitleaks, every `*.test.sh`; needs a running Docker daemon). CI also checks the PR title (Conventional Commits, `scripts/ci/pr-title.sh`): the squash merge uses it as the commit subject.
-- One script's tests: `bash scripts/ci/deploy-gate.test.sh`, `bash scripts/dev/stack.test.sh`, `bash deploy/test/afframe-deploy.test.sh`.
+- One script's tests: `bash <path>.test.sh`, for example `bash deploy/test/afframe-deploy.test.sh`.
 - Production stack end to end (slow, needs Docker; nightly in CI, never on afframe-vps): `bash deploy/test/integration.sh`.
 - Dev stack: Conductor Run → `dev`, or `CONDUCTOR_PORT=<port> bash scripts/dev/stack.sh up`; archive runs `stack.sh down`. On Hleb's Mac, Docker points at the Dev Docker daemon on oracle-vps (configured outside this repo, don't change it); published ports appear on `localhost`. Web on `$CONDUCTOR_PORT`, Postgres on `+1` (user, password and database `afframe`).
 
@@ -22,7 +23,8 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and the prod
 
 - Small PRs, one concern each, open for hours not days. Draft until ready.
 - `ci` is the only required check and must stay fast (about a minute). Squash merge once it is green; no merge queue. No one can bypass the ruleset.
-- No deploy yet: production moves to the self-hosted VPS (see `ARCHITECTURE.md`, section 9).
+- Merge to `main` = deploy to afframe-vps in about a minute (`deploy.yml`: changed services only, blue/green, `/health` gate). Skip a deploy: label `no-deploy` or `[no deploy]` in the PR title. Rollback: `docs/vps.md`.
+- Deploys run only while the repository variable `AFFRAME_VPS_ENABLED` is `true`.
 - AI review: CodeRabbit reviews every PR when it leaves draft (`.coderabbit.yaml`); Claude on demand with label `claude-review` or `@claude`. Both advisory, never required.
 
 ## Service contract (what CI expects from `apps/<name>/`)

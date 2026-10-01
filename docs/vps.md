@@ -30,6 +30,18 @@ Host layout, all owned by the `deploy` user:
 
 ## Deploy
 
+Every push to `main` runs `.github/workflows/deploy.yml`: the no-deploy gate, `deploy-services.sh` (services whose `apps/<name>/` or manifest changed; everything on a manual run), a build to `ghcr.io/afframe/afframe/<service>:sha-<sha>` with a provenance attestation, then `afframe-deploy` over Tailscale SSH. Docs-only merges build and deploy nothing.
+
+GitHub configuration (no secrets):
+
+| Where | Name | Value |
+|---|---|---|
+| Repository variable | `AFFRAME_VPS_ENABLED` | `true` once the host is ready; anything else skips the deploy job |
+| Environment `production` (branch `main` only), variables | `TS_OAUTH_CLIENT_ID`, `TS_AUDIENCE` | Tailscale federated identity client for `repo:afframe/afframe:environment:production` |
+| | `DEPLOY_HOST` | tailnet name of afframe-vps |
+
+The GHCR packages `afframe/<service>` should be public (package settings) so the host pulls without a login.
+
 `afframe-deploy deploy <git-sha> [<service>=ghcr.io/afframe/afframe/<service>@sha256:<digest> ...]`, run as `deploy`:
 
 1. Fetches `origin/main` and checks out `<git-sha>` (refused unless it is on `main`).
