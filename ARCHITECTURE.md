@@ -57,7 +57,7 @@ Postgres 18. Not provisioned yet; it arrives with the VPS stack (section 9). Sch
 ## 6. Deployment & Infrastructure
 
 - **Hosting:** self-hosted VPS (Hostinger KVM 2), not wired yet.
-- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `repo-lint`, `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`).
+- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `pr-title` (Conventional Commits), `repo-lint` (actionlint, zizmor, shellcheck, gitleaks, script tests), `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`).
 - **Branch protection:** ruleset on the default branch: PR required, `ci` required, squash only, linear history, no deletion or force-push, no bypass actors.
 
 ## 7. Security Considerations
