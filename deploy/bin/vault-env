@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Renders afframe's secrets from Vault (KV v2, mount `secret`) into AFFRAME_HOME, mode 600:
+#   secret/afframe/prod/infra -> env/infra.env, plus tls/origin.crt and tls/origin.key from
+#                                ORIGIN_CERT_PEM and ORIGIN_KEY_PEM
+#   secret/afframe/prod/app   -> env/app.env
+# Needs VAULT_ADDR and VAULT_TOKEN (a read-only token on the host, /etc/afframe/vault.env).
+set -euo pipefail
+# shellcheck source=deploy/bin/common.sh
+source "$(dirname "$0")/common.sh"
+
+: "${VAULT_ADDR:?VAULT_ADDR is not set}" "${VAULT_TOKEN:?VAULT_TOKEN is not set}"
+umask 077
+mkdir -p "$AFFRAME_HOME/env" "$AFFRAME_HOME/tls"
+
+read_kv() {
+  curl -fsS -m 10 -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/secret/data/afframe/prod/$1" \
+    | jq -e '.data.data'
+}
+
+# write_env <json> <file>: KEY=VALUE lines for every key except *_PEM; multi-line values are refused.
+write_env() {
+  jq -r 'to_entries[] | select(.key | endswith("_PEM") | not)
+    | if (.value | tostring | contains("\n")) then error("multi-line value for \(.key)")
+      else "\(.key)=\(.value)" end' <<< "$1" > "$2.tmp"
+  mv "$2.tmp" "$2"
+}
+
+infra="$(read_kv infra)" || die "cannot read secret/afframe/prod/infra"
+app="$(read_kv app)" || die "cannot read secret/afframe/prod/app"
+
+write_env "$infra" "$AFFRAME_HOME/env/infra.env"
+write_env "$app" "$AFFRAME_HOME/env/app.env"
+jq -er '.ORIGIN_CERT_PEM' <<< "$infra" > "$AFFRAME_HOME/tls/origin.crt.tmp" || die "ORIGIN_CERT_PEM missing in infra"
+jq -er '.ORIGIN_KEY_PEM' <<< "$infra" > "$AFFRAME_HOME/tls/origin.key.tmp" || die "ORIGIN_KEY_PEM missing in infra"
+mv "$AFFRAME_HOME/tls/origin.crt.tmp" "$AFFRAME_HOME/tls/origin.crt"
+mv "$AFFRAME_HOME/tls/origin.key.tmp" "$AFFRAME_HOME/tls/origin.key"
+# Traefik runs as root in its container; the files stay unreadable for other host users.
+echo "secrets rendered: $(wc -l < "$AFFRAME_HOME/env/infra.env") infra, $(wc -l < "$AFFRAME_HOME/env/app.env") app"

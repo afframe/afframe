@@ -1,0 +1,70 @@
+# Infrastructure on afframe-vps: Traefik and Postgres. App services are not in here: afframe-deploy
+# runs them as blue/green containers on the same networks (deploy/services/<name>.env).
+# Started by afframe-deploy as compose project `afframe`; host paths live under AFFRAME_HOME.
+name: afframe
+
+services:
+  traefik:
+    image: traefik:v3.7.13
+    container_name: afframe-traefik
+    restart: unless-stopped
+    mem_limit: 256m
+    ports:
+      - "${AFFRAME_HTTP_PORT:-80}:80"
+      - "${AFFRAME_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ${AFFRAME_HOME:?}/traefik/dynamic:/etc/traefik/dynamic:ro
+      - ${AFFRAME_HOME:?}/tls:/etc/traefik/tls:ro
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  postgres:
+    build: ./postgres
+    image: afframe-postgres:local
+    container_name: afframe-postgres
+    restart: unless-stopped
+    mem_limit: 2g
+    shm_size: 256m
+    # POSTGRES_PASSWORD and the PGBACKREST_REPO1_* settings come from Vault (deploy/bin/vault-env).
+    env_file:
+      - path: ${AFFRAME_HOME:?}/env/infra.env
+        format: raw
+    environment:
+      POSTGRES_USER: afframe
+      POSTGRES_DB: afframe
+      PGBACKREST_STANZA: afframe
+      PGBACKREST_PG1_PATH: /var/lib/postgresql/18/docker
+      PGBACKREST_REPO1_RETENTION_FULL: "4"
+      PGBACKREST_START_FAST: "y"
+      PGBACKREST_PROCESS_MAX: "2"
+      PGBACKREST_LOG_PATH: /tmp
+      PGBACKREST_LOCK_PATH: /tmp/pgbackrest
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=pgbackrest archive-push %p
+      - -c
+      - archive_timeout=60
+    volumes:
+      - ${AFFRAME_HOME:?}/postgres:/var/lib/postgresql
+      - ${AFFRAME_HOME:?}/pgbackrest:/var/lib/pgbackrest
+    networks: [db]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "afframe", "-d", "afframe"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  edge:
+    name: afframe-edge
+  db:
+    name: afframe-db
+    internal: true

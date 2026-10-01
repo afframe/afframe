@@ -14,7 +14,7 @@ echo "== actionlint"
 docker run --rm "${as_me[@]}" -v "$PWD:/repo" -w /repo "$ACTIONLINT_IMAGE" -color
 
 echo "== shellcheck"
-mapfile -t shell_scripts < <(git ls-files '*.sh')
+mapfile -t shell_scripts < <(git ls-files '*.sh' 'deploy/bin/*')
 if [[ "${#shell_scripts[@]}" -gt 0 ]]; then
   docker run --rm "${as_me[@]}" -v "$PWD:/mnt" -w /mnt "$SHELLCHECK_IMAGE" "${shell_scripts[@]}"
 fi

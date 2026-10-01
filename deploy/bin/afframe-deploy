@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# Deploys afframe on afframe-vps as the `deploy` user; .github/workflows/deploy.yml calls it over
+# Tailscale SSH.
+#   afframe-deploy deploy <git-sha> [<service>=<registry>/<service>@sha256:<digest> ...]
+#   afframe-deploy rollback <service>
+# deploy: checks out <git-sha> (must be on origin/main), renders secrets from Vault, brings up
+# Traefik and Postgres, then per service: pull, migrate, start the idle colour, wait for /health,
+# point Traefik at it, remove the old colour. A failed migration or health check leaves traffic
+# on the running container. rollback: the previous image again, without migrations.
+set -euo pipefail
+# shellcheck source=deploy/bin/common.sh
+source "$(dirname "$0")/common.sh"
+
+REGISTRY="${AFFRAME_REGISTRY:-ghcr.io/afframe/afframe}"
+HEALTH_TRIES="${AFFRAME_HEALTH_TRIES:-60}"
+export AFFRAME_HOME
+
+compose() { docker compose -p afframe -f "$REPO/deploy/compose.prod.yml" "$@"; }
+
+valid_service() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]]; }
+
+valid_image() {
+  local service="$1" image="$2"
+  [[ "$image" == "$REGISTRY/$service@sha256:"* && "${image##*@sha256:}" =~ ^[0-9a-f]{64}$ ]]
+}
+
+checkout() {
+  git -C "$REPO" fetch --quiet origin main
+  git -C "$REPO" merge-base --is-ancestor "$1" origin/main || die "$1 is not on origin/main"
+  git -C "$REPO" checkout --quiet --detach "$1"
+}
+
+prepare() {
+  mkdir -p "$AFFRAME_HOME"/{env,tls,state,traefik/dynamic,postgres,pgbackrest}
+  if [[ -f /etc/afframe/vault.env ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source /etc/afframe/vault.env
+    set +a
+  fi
+  "$REPO/deploy/bin/vault-env"
+  cp "$REPO"/deploy/traefik/dynamic/*.yml "$AFFRAME_HOME/traefik/dynamic/"
+  log "infrastructure"
+  compose up -d --build --wait --quiet-pull
+  docker exec -u postgres afframe-postgres pgbackrest stanza-create > /dev/null
+}
+
+# deploy_service <service> <image> <migrate: yes|no>
+deploy_service() {
+  local service="$1" image="$2" migrate="$3"
+  local HOST="" PORT="" MEMORY="" MIGRATE="" current="" colour="" previous=""
+  local manifest="$REPO/deploy/services/$service.env" state="$AFFRAME_HOME/state/$service"
+  [[ -f "$manifest" ]] || die "no manifest deploy/services/$service.env"
+  read_vars "$manifest" HOST PORT MEMORY MIGRATE
+  read_vars "$state" current colour previous
+
+  log "$service: pull $image"
+  docker pull -q "$image" > /dev/null
+  if [[ "$migrate" == yes && -n "$MIGRATE" ]]; then
+    log "$service: migrate"
+    # shellcheck disable=SC2086 # MIGRATE is a command line from the manifest
+    docker run --rm --network afframe-db --env-file "$AFFRAME_HOME/env/app.env" "$image" $MIGRATE
+  fi
+
+  local new=blue
+  [[ "$colour" == blue ]] && new=green
+  local name="afframe-$service-$new" old="afframe-$service-$colour"
+  docker rm -f "$name" > /dev/null 2>&1 || true
+  docker run -d --name "$name" --network afframe-edge --restart unless-stopped --memory "$MEMORY" \
+    --env-file "$AFFRAME_HOME/env/app.env" -e PORT="$PORT" --label afframe.service="$service" \
+    "$image" > /dev/null
+  docker network connect afframe-db "$name"
+
+  log "$service: wait for /health on $name"
+  local i
+  for ((i = 1; i <= HEALTH_TRIES; i++)); do
+    if docker exec afframe-traefik wget -q -T 2 -O /dev/null "http://$name:$PORT/health" 2> /dev/null; then
+      break
+    fi
+    sleep 1
+  done
+  if ((i > HEALTH_TRIES)); then
+    docker logs --tail 50 "$name" >&2 || true
+    docker rm -f "$name" > /dev/null
+    die "$service: health check failed; traffic stays on ${current:-nothing}"
+  fi
+
+  local route="$AFFRAME_HOME/traefik/dynamic/$service.yml"
+  cat > "$route.tmp" <<YAML
+http:
+  routers:
+    $service:
+      rule: Host(\`$HOST\`)
+      entryPoints: [websecure]
+      service: $service
+      tls: {}
+  services:
+    $service:
+      loadBalancer:
+        servers:
+          - url: http://$name:$PORT
+YAML
+  mv "$route.tmp" "$route"
+  sleep 2 # Traefik's file watcher picks the change up within about a second
+  [[ -n "$colour" ]] && docker rm -f "$old" > /dev/null 2>&1
+  printf 'current=%s\ncolour=%s\nprevious=%s\n' "$image" "$new" "$current" > "$state"
+  log "$service: live on $name"
+}
+
+main() {
+  mkdir -p "$AFFRAME_HOME"
+  exec 9> "$AFFRAME_HOME/deploy.lock"
+  flock -n 9 || die "another deploy is running"
+
+  case "${1:-}" in
+    deploy)
+      local sha="${2:-}" spec
+      [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || die "usage: deploy <git-sha> [<service>=<image> ...]"
+      shift 2
+      for spec in "$@"; do
+        if ! valid_service "${spec%%=*}" || ! valid_image "${spec%%=*}" "${spec#*=}"; then
+          die "invalid service image: $spec"
+        fi
+      done
+      checkout "$sha"
+      prepare
+      for spec in "$@"; do
+        deploy_service "${spec%%=*}" "${spec#*=}" yes
+      done
+      docker image prune -f > /dev/null
+      log "deployed $sha"
+      ;;
+    rollback)
+      local service="${2:-}" previous=""
+      valid_service "$service" || die "usage: rollback <service>"
+      read_vars "$AFFRAME_HOME/state/$service" previous
+      [[ -n "$previous" ]] || die "$service: no previous image to roll back to"
+      deploy_service "$service" "$previous" no
+      ;;
+    *)
+      die "usage: afframe-deploy deploy <git-sha> [<service>=<image> ...] | rollback <service>"
+      ;;
+  esac
+}
+
+main "$@"
