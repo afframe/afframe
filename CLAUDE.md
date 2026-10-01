@@ -10,7 +10,7 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and the prod
 - `.github/workflows/deploy.yml`: build changed services to GHCR and deploy `main` to afframe-vps. `deploy-integration.yml`: slow end-to-end test of `deploy/` (nightly). `security.yml`: nightly CodeQL (workflows), Trivy (repo and images, `scripts/ci/trivy-scan.sh`) and Scorecard into the Security tab.
 - `scripts/ci/`: shell used by CI, the deploy workflow and the local gate (`deploy-gate.sh` no-deploy switch, `deploy-services.sh` what changed).
 - `compose.dev.yml`, `scripts/dev/stack.sh`, `.conductor/settings.toml`: the per-workspace dev stack.
-- `deploy/`: production on afframe-vps (Traefik, Postgres 18 + pgBackRest, blue/green deploy script, backup, health and restore-drill scripts, systemd units). Runbook: `docs/vps.md`.
+- `deploy/`: production on afframe-vps (Traefik, Postgres 18 + pgBackRest, blue/green deploy script, backup, dump, health and restore-drill scripts, systemd units). Runbook: `docs/vps.md`.
 
 ## Commands
 
