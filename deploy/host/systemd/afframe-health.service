@@ -1,0 +1,9 @@
+[Unit]
+Description=afframe host health check (deploy/bin/afframe-health)
+After=docker.service
+
+[Service]
+Type=oneshot
+User=deploy
+Environment=AFFRAME_HOME=/srv/afframe
+ExecStart=/srv/afframe/repo/deploy/bin/afframe-health
