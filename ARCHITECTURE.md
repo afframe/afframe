@@ -9,7 +9,7 @@ afframe/
 ├── apps/                      # One folder per deployable service, each with a Dockerfile
 │   └── placeholder/           # TEMPORARY nginx fixture that proves the pipeline
 ├── .github/
-│   ├── workflows/             # ci, deploy, deploy-integration, claude, claude-code-review
+│   ├── workflows/             # ci, deploy, deploy-integration, security, claude, claude-code-review
 │   ├── rulesets/main.json     # Ruleset applied to the default branch
 │   └── dependabot.yml         # Updates for pinned actions and base images
 ├── .conductor/settings.toml   # Conductor: dev stack run button and archive cleanup
@@ -70,7 +70,7 @@ Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only
 - **Hosting:** afframe-vps, Hostinger KVM 2 (2 vCPU, 8 GB), Ubuntu 24.04 LTS, Docker. Traefik routes by file (no Docker socket) behind Cloudflare (Full strict, Origin CA certificate). Apps deploy blue/green by image digest with a `/health` gate and one-command rollback (`deploy/bin/afframe-deploy`). Runbook and host setup: `docs/vps.md`.
 - **CD:** `deploy.yml` on every push to `main`: `deploy-gate.sh` (label `no-deploy` / `[no deploy]` skips; API errors fail closed), `deploy-services.sh` (changed services), build and push `ghcr.io/afframe/afframe/<service>:sha-<sha>` with a provenance attestation, then `afframe-deploy` over Tailscale SSH. No GitHub secrets; enabled by the repository variable `AFFRAME_VPS_ENABLED`.
 - **Monitoring:** Better Stack free plan: uptime check of `/health`, heartbeats from the backup, health and restore-drill timers, status page.
-- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `pr-title` (Conventional Commits), `repo-lint` (actionlint, zizmor, shellcheck, gitleaks, script tests), `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`). Slow checks run outside `ci`: `Deploy integration` (nightly, and advisory on PRs touching `deploy/`).
+- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `pr-title` (Conventional Commits), `repo-lint` (actionlint, zizmor, shellcheck, gitleaks, script tests), `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`). Slow checks run outside `ci`: `Deploy integration` (nightly, and advisory on PRs touching `deploy/`) and `Security scans` (nightly CodeQL for workflows, Trivy for the repo and images, OpenSSF Scorecard; findings in the Security tab).
 - **Branch protection:** ruleset on the default branch: PR required, `ci` required, squash only, linear history, no deletion or force-push, no bypass actors.
 
 ## 7. Security Considerations
