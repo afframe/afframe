@@ -1,6 +1,6 @@
 # Afframe web apps
 
-Public monorepo for the Afframe web apps. Pre-users v0: the CI gate exists; the apps and the deploy to the VPS do not yet. Frontend will be React, the database is Postgres, the backend language is not chosen. Keep everything outside `apps/<name>/` language-agnostic.
+Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and the production stack for afframe-vps exist; the apps do not yet. Frontend will be React, the database is Postgres, the backend language is not chosen. Keep everything outside `apps/<name>/` language-agnostic.
 
 ## Layout
 
@@ -9,11 +9,13 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate exists; the 
 - `.github/rulesets/main.json`: the `main` ruleset as applied to GitHub (keep in sync).
 - `scripts/ci/`: shell used by CI and the local gate. `deploy-gate.sh` holds the no-deploy rule for the upcoming VPS deploy workflow.
 - `compose.dev.yml`, `scripts/dev/stack.sh`, `.conductor/settings.toml`: the per-workspace dev stack.
+- `deploy/`: production on afframe-vps (Traefik, Postgres 18 + pgBackRest, blue/green deploy script, backup, health and restore-drill scripts, systemd units). Runbook: `docs/vps.md`.
 
 ## Commands
 
 - Gate: `bash scripts/ci/repo-lint.sh` (actionlint, zizmor, shellcheck, gitleaks, every `*.test.sh`; needs a running Docker daemon). CI also checks the PR title (Conventional Commits, `scripts/ci/pr-title.sh`): the squash merge uses it as the commit subject.
-- One script's tests: `bash scripts/ci/deploy-gate.test.sh`, `bash scripts/dev/stack.test.sh`.
+- One script's tests: `bash scripts/ci/deploy-gate.test.sh`, `bash scripts/dev/stack.test.sh`, `bash deploy/test/afframe-deploy.test.sh`.
+- Production stack end to end (slow, needs Docker; nightly in CI, never on afframe-vps): `bash deploy/test/integration.sh`.
 - Dev stack: Conductor Run → `dev`, or `CONDUCTOR_PORT=<port> bash scripts/dev/stack.sh up`; archive runs `stack.sh down`. On Hleb's Mac, Docker points at the Dev Docker daemon on oracle-vps (configured outside this repo, don't change it); published ports appear on `localhost`. Web on `$CONDUCTOR_PORT`, Postgres on `+1` (user, password and database `afframe`).
 
 ## Shipping
@@ -27,11 +29,13 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate exists; the 
 
 - `Dockerfile` in the service folder; the container listens on `$PORT` (IPv4 and IPv6) and answers `GET /health` with 2xx.
 - Tests run through `compose.ci.yml` at the root: service `test` (exit code = result), optional `migrate`, database `postgres:18`. CI runs it with `docker compose -p ci-<run> ... run --rm`.
-- Migrations run as a separate pre-deploy step, never in the Docker build.
+- Migrations run as a separate pre-deploy step, never in the Docker build: `MIGRATE` in `deploy/services/<name>.env`, run in the new image before the switch.
+- Deployed to afframe-vps when `deploy/services/<name>.env` exists (`HOST`, `PORT`, `MEMORY`, `MIGRATE`).
 
 ## Gotchas
 
-- Secrets never go in git or in `VITE_*` or other build-time variables (those end up in public bundles).
+- Secrets never go in git, GitHub, or `VITE_*` and other build-time variables (those end up in public bundles). Runtime secrets live in Vault on oracle-vps (`secret/afframe/prod/{infra,app}`, see `docs/vps.md`).
+- Slow checks (integration, scans) never join the required `ci`; they run nightly or on demand.
 - No per-PR preview environments: test on the dev stack; CI tests the built image.
 
 ## Database changes

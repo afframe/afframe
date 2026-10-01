@@ -9,6 +9,10 @@ updates:
       actions:
         patterns: ["*"]
   - package-ecosystem: docker
-    directories: ["/apps/*"]
+    directories: ["/apps/*", "/deploy/postgres"]
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /deploy
     schedule:
       interval: weekly

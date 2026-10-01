@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Afframe web apps, pre-users v0. This document covers what exists today: the CI gate. Hosting and application components are added here as they land.
+Afframe web apps, pre-users v0. This document covers what exists today: the CI gate and the production stack for afframe-vps. Hosting and application components are added here as they land.
 
 ## 1. Project Structure
 
@@ -16,6 +16,8 @@ afframe/
 ├── compose.dev.yml            # Dev stack per workspace
 ├── scripts/ci/                # repo-lint.sh (gate), deploy-gate.sh (+ tests)
 ├── scripts/dev/               # stack.sh (+ tests)
+├── deploy/                    # Production on afframe-vps: compose, Traefik, Postgres image, host scripts
+├── docs/vps.md                # afframe-vps runbook
 └── CLAUDE.md
 ```
 
@@ -26,7 +28,12 @@ agents / developer ──PR──► GitHub (afframe/afframe, public)
                               │  ci.yml on pull_request (required check `ci`)
                               │ squash merge
                               ▼
-                            main   (deploy to the VPS: not built yet, see section 9)
+                            main
+                              │  (deploy workflow: next step, see section 9)
+                              ▼
+        afframe-vps (Hostinger KVM 2, Ubuntu 24.04): Traefik ── blue/green app containers
+                                                       └──── Postgres 18 ── pgBackRest WAL ──► Cloudflare R2
+        secrets: Vault on oracle-vps (over Tailscale)    monitoring: Better Stack heartbeats + uptime
 ```
 
 ## 3. Core Components
@@ -45,7 +52,7 @@ nginx serving a static page and `/health`. Exists only to exercise build and dep
 
 ## 4. Data Stores
 
-Postgres 18. Not provisioned yet; it arrives with the VPS stack (section 9). Schema changes: expand/contract, run as pre-deploy migrations.
+Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only. pgBackRest archives WAL continuously and takes a daily backup (full on Sundays) to Cloudflare R2, encrypted, 4 full backups kept: point-in-time recovery over about 4 weeks. A monthly restore drill restores into a throwaway container. Schema changes: expand/contract, run as pre-deploy migrations.
 
 ## 5. External Integrations / APIs
 
@@ -57,13 +64,15 @@ Postgres 18. Not provisioned yet; it arrives with the VPS stack (section 9). Sch
 
 ## 6. Deployment & Infrastructure
 
-- **Hosting:** self-hosted VPS (Hostinger KVM 2), not wired yet.
-- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `pr-title` (Conventional Commits), `repo-lint` (actionlint, zizmor, shellcheck, gitleaks, script tests), `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`).
+- **Hosting:** afframe-vps, Hostinger KVM 2 (2 vCPU, 8 GB), Ubuntu 24.04 LTS, Docker. Traefik routes by file (no Docker socket) behind Cloudflare (Full strict, Origin CA certificate). Apps deploy blue/green by image digest with a `/health` gate and one-command rollback (`deploy/bin/afframe-deploy`). Runbook and host setup: `docs/vps.md`.
+- **Monitoring:** Better Stack free plan: uptime check of `/health`, heartbeats from the backup, health and restore-drill timers, status page.
+- **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `pr-title` (Conventional Commits), `repo-lint` (actionlint, zizmor, shellcheck, gitleaks, script tests), `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`). Slow checks run outside `ci`: `Deploy integration` (nightly, and advisory on PRs touching `deploy/`).
 - **Branch protection:** ruleset on the default branch: PR required, `ci` required, squash only, linear history, no deletion or force-push, no bypass actors.
 
 ## 7. Security Considerations
 
-- Public repo: no secrets in git.
+- Public repo: no secrets in git or GitHub. Runtime secrets come from Vault on oracle-vps at deploy time (read-only token on the host).
+- afframe-vps runs only `main`: `afframe-deploy` refuses commits not on `origin/main` and images outside `ghcr.io/afframe/afframe/<service>`.
 - Workflows default to `contents: read`; third-party actions are pinned to commit SHAs; `persist-credentials: false` on checkouts.
 - The review action only runs for same-repo PRs.
 - gitleaks runs on every PR over the full history.
@@ -77,7 +86,7 @@ Postgres 18. Not provisioned yet; it arrives with the VPS stack (section 9). Sch
 
 ## 9. Future Considerations / Roadmap
 
-- Production on the VPS: images on GHCR, deploy from `main` with the no-deploy gate, Postgres 18 with off-site backups and point-in-time recovery.
+- Deploy workflow: build to GHCR on `main`, deploy over Tailscale SSH with the no-deploy gate.
 - Replace `apps/placeholder` with the React app; choose the backend language.
 
 ## 10. Project Identification
