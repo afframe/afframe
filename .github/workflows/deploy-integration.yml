@@ -1,0 +1,32 @@
+name: Deploy integration
+
+# End-to-end test of deploy/ (deploy/test/integration.sh): Vault dev server, local registry,
+# blue/green deploy, failed health check, rollback, pgBackRest backup and restore drill.
+# Slow (a few minutes), so never part of the required `ci`: nightly, on demand, and advisory on
+# PRs that change deploy/.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "deploy/**"
+      - ".github/workflows/deploy-integration.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: bash deploy/test/integration.sh

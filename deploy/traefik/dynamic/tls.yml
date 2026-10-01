@@ -1,0 +1,7 @@
+# Default certificate: the Cloudflare Origin CA certificate, written from Vault by vault-env.
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/tls/origin.crt
+        keyFile: /etc/traefik/tls/origin.key
