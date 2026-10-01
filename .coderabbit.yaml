@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit reviews every PR once it is ready for review (drafts are skipped). Advisory only:
+# it never requests changes and its status is never a required check; `ci` is the only gate.
+# Claude review stays on demand (label `claude-review`, or `@claude`).
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+knowledge_base:
+  code_guidelines:
+    enabled: true

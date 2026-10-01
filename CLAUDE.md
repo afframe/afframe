@@ -21,7 +21,7 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate exists; the 
 - Small PRs, one concern each, open for hours not days. Draft until ready.
 - `ci` is the only required check and must stay fast (about a minute). Squash merge once it is green; no merge queue. No one can bypass the ruleset.
 - No deploy yet: production moves to the self-hosted VPS (see `ARCHITECTURE.md`, section 9).
-- AI review on demand: label `claude-review`, or comment `@claude`. Never required.
+- AI review: CodeRabbit reviews every PR when it leaves draft (`.coderabbit.yaml`); Claude on demand with label `claude-review` or `@claude`. Both advisory, never required.
 
 ## Service contract (what CI expects from `apps/<name>/`)
 
