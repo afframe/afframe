@@ -14,8 +14,8 @@ images="$(mktemp -d)"
 trap 'rm -rf "$images"' EXIT
 
 trivy() {
-  docker run --rm -v "$PWD:/repo:ro" -v "$out:/out" -v "$images:/images:ro" -v "$TRIVY_CACHE:/root/.cache/trivy" \
-    -w /repo "$TRIVY_IMAGE" --quiet "$@"
+  docker run --rm --user "$(id -u):$(id -g)" -e TRIVY_CACHE_DIR=/cache -v "$TRIVY_CACHE:/cache" \
+    -v "$PWD:/repo:ro" -v "$out:/out" -v "$images:/images:ro" -w /repo "$TRIVY_IMAGE" --quiet "$@"
 }
 
 echo "== repo"
@@ -30,4 +30,11 @@ for dir in "${targets[@]}"; do
   docker save "scan/$name" -o "$images/$name.tar"
   trivy image --input "/images/$name.tar" --severity HIGH,CRITICAL --ignore-unfixed \
     --format sarif --output "/out/image-$name.sarif"
+done
+
+# Code scanning needs one category per SARIF run: name each after its file.
+for sarif in "$out"/*.sarif; do
+  category="trivy-$(basename "$sarif" .sarif)/"
+  jq --arg id "$category" '.runs[0].automationDetails.id = $id' "$sarif" > "$images/sarif.tmp"
+  cat "$images/sarif.tmp" > "$sarif"
 done
