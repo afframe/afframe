@@ -12,7 +12,7 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate exists; the 
 
 ## Commands
 
-- Gate: `bash scripts/ci/repo-lint.sh` (actionlint, shellcheck, gitleaks, every `*.test.sh`; needs a running Docker daemon).
+- Gate: `bash scripts/ci/repo-lint.sh` (actionlint, zizmor, shellcheck, gitleaks, every `*.test.sh`; needs a running Docker daemon). CI also checks the PR title (Conventional Commits, `scripts/ci/pr-title.sh`): the squash merge uses it as the commit subject.
 - One script's tests: `bash scripts/ci/deploy-gate.test.sh`, `bash scripts/dev/stack.test.sh`.
 - Dev stack: Conductor Run → `dev`, or `CONDUCTOR_PORT=<port> bash scripts/dev/stack.sh up`; archive runs `stack.sh down`. On Hleb's Mac, Docker points at the Dev Docker daemon on oracle-vps (configured outside this repo, don't change it); published ports appear on `localhost`. Web on `$CONDUCTOR_PORT`, Postgres on `+1` (user, password and database `afframe`).
 

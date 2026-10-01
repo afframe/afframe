@@ -5,6 +5,7 @@ name: CI
 # merges straight to main.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -33,6 +34,16 @@ jobs:
           else
             echo "has_compose_ci=false" >> "$GITHUB_OUTPUT"
           fi
+
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: bash scripts/ci/pr-title.sh "$PR_TITLE"
 
   repo-lint:
     runs-on: ubuntu-latest
@@ -82,9 +93,10 @@ jobs:
           docker compose -p "$project" -f compose.ci.yml run --rm test
 
   # The only required status check. Skipped jobs count as success; failed or cancelled ones fail it.
+  # Not run when the whole run is cancelled (a newer push replaced it), so no stale red `ci`.
   ci:
-    if: always()
-    needs: [detect, repo-lint, build, test]
+    if: ${{ !cancelled() }}
+    needs: [detect, pr-title, repo-lint, build, test]
     runs-on: ubuntu-latest
     steps:
       - env:

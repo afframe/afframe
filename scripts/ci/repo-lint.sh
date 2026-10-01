@@ -8,10 +8,14 @@ cd "$(git rev-parse --show-toplevel)"
 ACTIONLINT_IMAGE="rhysd/actionlint:1.7.12"
 SHELLCHECK_IMAGE="koalaman/shellcheck:v0.11.0"
 GITLEAKS_IMAGE="ghcr.io/gitleaks/gitleaks:v8.30.1"
+ZIZMOR_IMAGE="ghcr.io/zizmorcore/zizmor:1.30.1"
 as_me=(--user "$(id -u):$(id -g)")
 
 echo "== actionlint"
 docker run --rm "${as_me[@]}" -v "$PWD:/repo" -w /repo "$ACTIONLINT_IMAGE" -color
+
+echo "== zizmor"
+docker run --rm "${as_me[@]}" -v "$PWD:/repo" -w /repo "$ZIZMOR_IMAGE" --offline --no-progress .github/workflows
 
 echo "== shellcheck"
 mapfile -t shell_scripts < <(git ls-files '*.sh')
