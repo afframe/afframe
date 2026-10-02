@@ -6,7 +6,7 @@
 # deploy: checks out <git-sha> (must be on origin/main), renders secrets from Vault, brings up
 # Traefik and Postgres when their inputs changed since the last apply, then in two phases: per
 # service pull, migrate, start the idle colour and wait for /health; only when every service
-# passed, per service point Traefik at the new colour and stop the old one. A failure before the
+# passed, point Traefik at every new colour, then stop the old ones together. A failure before the
 # switch (migration, health check, anything else) removes the new colours and switches nothing.
 # rollback: the previous image again, without migrations.
 # Images are private: `deploy` reads a registry token on stdin (the workflow run's own short-lived
@@ -21,8 +21,10 @@ HEALTH_TRIES="${AFFRAME_HEALTH_TRIES:-60}"
 MIGRATE_TIMEOUT="${AFFRAME_MIGRATE_TIMEOUT:-300}" # seconds
 export AFFRAME_HOME
 
-# New colours not yet switched to (removed on exit) and the throwaway Docker config of the login.
+# New colours not yet switched to (removed on exit), old colours to stop after the switch, and the
+# throwaway Docker config of the login.
 pending=()
+retired=()
 login_dir=""
 
 compose() { docker compose -p afframe -f "$REPO/deploy/compose.prod.yml" "$@"; }
@@ -72,13 +74,14 @@ checkout() {
 }
 
 # infra_hash: hash of what `compose up` reads: the compose file, deploy/postgres, deploy/traefik,
-# the rendered infra env file and the variables the compose file interpolates.
+# the rendered infra env file and certificate, and the variables the compose file interpolates.
 infra_hash() {
   {
     printf '%s\n' "$AFFRAME_HOME" "${AFFRAME_HTTP_PORT:-}" "${AFFRAME_HTTPS_PORT:-}"
     cd "$REPO/deploy"
     find compose.prod.yml postgres traefik -type f -print0 | sort -z | xargs -0 sha256sum
     sha256sum < "$AFFRAME_HOME/env/infra.env"
+    find "$AFFRAME_HOME/tls" -type f -print0 | sort -z | xargs -0r sha256sum
   } | sha256sum | cut -d' ' -f1
 }
 
@@ -174,7 +177,7 @@ start_service() {
 }
 
 # switch_service <service> <image>: points Traefik at the colour start_service started, records it
-# in the state, stops the old colour.
+# in the state, queues the old colour for retire_old.
 switch_service() {
   local service="$1" image="$2"
   local HOST="" PORT="" MEMORY="" MIGRATE="" current="" colour="" previous="" new="" name="" old=""
@@ -197,14 +200,21 @@ YAML
   mv "$route.tmp" "$route"
   printf 'current=%s\ncolour=%s\nprevious=%s\n' "$image" "$new" "$current" \
     > "$AFFRAME_HOME/state/$service"
-  sleep 2 # Traefik's file watcher picks the change up within about a second
-  if [[ -n "$colour" ]]; then
-    # Graceful stop lets in-flight requests finish. Traffic and state already point at the new
-    # colour, so a leftover old container is only reported; the next deploy replaces it.
-    docker stop -t 30 "$old" > /dev/null 2>&1 || true
-    docker rm -f "$old" > /dev/null 2>&1 || echo "warning: could not remove $old" >&2
-  fi
+  [[ -z "$colour" ]] || retired+=("$old")
   log "$service: live on $name"
+}
+
+# retire_old: stops the old colours of every switched service together, once Traefik follows.
+retire_old() {
+  local old
+  ((${#retired[@]})) || return 0
+  sleep 2 # Traefik's file watcher picks the change up within about a second
+  # Graceful stop lets in-flight requests finish. Traffic and state already point at the new
+  # colours, so a leftover old container is only reported; the next deploy replaces it.
+  docker stop -t 30 "${retired[@]}" > /dev/null 2>&1 || true
+  for old in "${retired[@]}"; do
+    docker rm -f "$old" > /dev/null 2>&1 || echo "warning: could not remove $old" >&2
+  done
 }
 
 main() {
@@ -235,6 +245,7 @@ main() {
       for spec in "$@"; do
         switch_service "${spec%%=*}" "${spec#*=}"
       done
+      retire_old
       prune_images
       log "deployed $sha"
       ;;
@@ -246,6 +257,7 @@ main() {
       start_service "$service" "$previous" no
       pending=()
       switch_service "$service" "$previous"
+      retire_old
       ;;
     *)
       die "usage: afframe-deploy deploy <git-sha> [<service>=<image> ...] | rollback <service>"

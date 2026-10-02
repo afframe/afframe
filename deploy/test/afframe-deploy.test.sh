@@ -169,6 +169,9 @@ check "infrastructure applied again" called "compose -p afframe"
 echo "# changed" >> "$AFFRAME_HOME/repo/deploy/compose.prod.yml"
 check "deploy after a compose file change" run deploy "$sha" "placeholder=$v4"
 check "infrastructure applied for it" called "compose -p afframe"
+echo cert-2 > "$AFFRAME_HOME/tls/origin.crt"
+check "deploy after a certificate change" run deploy "$sha" "placeholder=$v4"
+check "infrastructure applied for the certificate" called "compose -p afframe"
 echo false > "$FAKE/infra"
 check "deploy with infrastructure down" run deploy "$sha" "placeholder=$v4"
 check "infrastructure brought up again" called "compose -p afframe"
@@ -195,7 +198,7 @@ check "two services, both healthy" run deploy "$sha" "placeholder=$(digest place
 check "both switched" test "$(state placeholder current) $(state migrated current)" == "$(digest placeholder 5) $(digest migrated 5)"
 check "both routes moved" grep -q "$m_new:3000" <<< "$(route migrated)"
 check "every health check before the first switch" before "$m_new:3000/health" "stop -t 30 afframe-placeholder-$p_live"
-check "and the first switch happened" called "stop -t 30 afframe-placeholder-$p_live"
+check "old colours stopped together after both switches" called "stop -t 30 afframe-placeholder-$p_live afframe-migrated-$m_live"
 
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} test(s) failed"
