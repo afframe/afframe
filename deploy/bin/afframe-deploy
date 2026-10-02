@@ -92,8 +92,10 @@ deploy_service() {
     # A fixed name, so a migration left behind by a killed deploy is removed before the next one.
     local migration="afframe-$service-migrate"
     docker rm -f "$migration" > /dev/null 2>&1 || true
+    # TERM after the timeout, KILL 10 s later (a migration ignoring TERM would keep the client
+    # waiting); then the named container goes too, as killing the client does not stop it.
     # shellcheck disable=SC2086 # MIGRATE is a command line from the manifest
-    if ! timeout "$MIGRATE_TIMEOUT" docker run --rm --name "$migration" --network afframe-db \
+    if ! timeout -k 10 "$MIGRATE_TIMEOUT" docker run --rm --name "$migration" --network afframe-db \
       --env-file "$AFFRAME_HOME/env/app.env" "$image" $MIGRATE; then
       docker rm -f "$migration" > /dev/null 2>&1 || true
       die "$service: migration failed or timed out; traffic stays on ${current:-nothing}"

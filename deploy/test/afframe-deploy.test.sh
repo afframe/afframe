@@ -26,13 +26,14 @@ cat > "$FAKE/bin/docker" <<'FAKEDOCKER'
 echo "docker $*" >> "$FAKE/calls"
 if [[ "$1" == exec && "$2" == afframe-traefik ]]; then [[ "$(cat "$FAKE/health")" == ok ]]; exit; fi
 # Named containers that exist: one name per line in $FAKE/containers. $FAKE/remove = fail makes
-# stop and rm fail; $FAKE/migrate = hang makes the migration outlast its timeout.
+# stop and rm fail; $FAKE/migrate = hang makes the migration outlast its timeout and ignore TERM,
+# like a PID 1 without a signal handler.
 forget() { grep -vxF -- "$1" "$FAKE/containers" > "$FAKE/containers.tmp"; mv "$FAKE/containers.tmp" "$FAKE/containers"; }
 if [[ "$1" == stop || "$1" == rm ]] && [[ "$(cat "$FAKE/remove")" == fail ]]; then exit 1; fi
 if [[ "$1" == rm ]]; then forget "${@: -1}"; fi
 args="$*"
 if [[ "$1" == run && "$args" == *" --name "* ]]; then name="${args#* --name }"; echo "${name%% *}" >> "$FAKE/containers"; fi
-if [[ "$1" == run && "$*" == *" migrate up" && "$(cat "$FAKE/migrate")" == hang ]]; then exec /bin/sleep 5; fi
+if [[ "$1" == run && "$*" == *" migrate up" && "$(cat "$FAKE/migrate")" == hang ]]; then trap '' TERM; exec /bin/sleep 60; fi
 if [[ "$1" == run && "$*" == *" --rm "* && "$*" == *" --name "* ]]; then forget "${name%% *}"; fi
 # Images present locally: "<reference> <image id>" lines in $FAKE/local; `docker pull` adds one.
 # Every pulled reference gets the same image ID, so removing by ID would drop them all.
@@ -106,7 +107,9 @@ check "migration container gone" fails exists afframe-migrated-migrate
 
 echo hang > "$FAKE/migrate"
 echo afframe-migrated-migrate >> "$FAKE/containers"
+started=$SECONDS
 check "migration past its timeout fails the deploy" fails run deploy "$sha" "migrated=$(digest migrated 2)"
+check "a migration ignoring TERM is killed after the grace period" test $((SECONDS - started)) -lt 30
 check "leftover migration container removed first" called "rm -f afframe-migrated-migrate"
 check "before the migration" before "rm -f afframe-migrated-migrate" "migrate up"
 check "no migration container left" fails exists afframe-migrated-migrate
