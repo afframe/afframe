@@ -43,7 +43,7 @@ GitHub configuration (no secrets):
 | Environment `production` (branch `main` only), variables | `TS_OAUTH_CLIENT_ID`, `TS_AUDIENCE` | Tailscale federated identity client for `repo:afframe/afframe:environment:production` |
 | | `DEPLOY_HOST` | tailnet name of afframe-vps |
 
-The GHCR packages `afframe/<service>` should be public (package settings) so the host pulls without a login.
+The GHCR packages `afframe/<service>` stay private. The deploy job pipes its own short-lived `GITHUB_TOKEN` (`packages: read`) to `afframe-deploy` on stdin, which logs in only for the pulls, in a throwaway Docker config; nothing is stored on the host. The current and previous image of each service stay on the host, so a rollback needs no registry access.
 
 `afframe-deploy deploy <git-sha> [<service>=ghcr.io/afframe/afframe/<service>@sha256:<digest> ...]`, run as `deploy`:
 

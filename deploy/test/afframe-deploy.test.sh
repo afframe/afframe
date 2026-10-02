@@ -23,7 +23,18 @@ deploy="$AFFRAME_HOME/repo/deploy/bin/afframe-deploy"
 cat > "$FAKE/bin/docker" <<'FAKEDOCKER'
 #!/usr/bin/env bash
 echo "docker $*" >> "$FAKE/calls"
-if [[ "$1" == exec && "$2" == afframe-traefik ]]; then [[ "$(cat "$FAKE/health")" == ok ]]; fi
+if [[ "$1" == exec && "$2" == afframe-traefik ]]; then [[ "$(cat "$FAKE/health")" == ok ]]; exit; fi
+# Images present locally: "<reference> <image id>" lines in $FAKE/local; `docker pull` adds one.
+# Every pulled reference gets the same image ID, so removing by ID would drop them all.
+if [[ "$1 $2" == "image inspect" ]]; then grep -q "^$3 " "$FAKE/local"; exit; fi
+if [[ "$1" == pull ]]; then echo "${@: -1} shared-id" >> "$FAKE/local"; fi
+if [[ "$1 $2" == "image ls" ]]; then cut -d' ' -f1 "$FAKE/local"; fi
+if [[ "$1 $2" == "image rm" ]]; then
+  awk -v x="${@: -1}" '$1 != x && $2 != x' "$FAKE/local" > "$FAKE/local.tmp"
+  mv "$FAKE/local.tmp" "$FAKE/local"
+fi
+if [[ "$1" == login ]]; then cat > "$FAKE/login-password"; fi
+exit 0
 FAKEDOCKER
 cat > "$FAKE/bin/git" <<'FAKEGIT'
 #!/usr/bin/env bash
@@ -35,8 +46,10 @@ cat > "$FAKE/bin/sleep" <<'FAKESLEEP'
 FAKESLEEP
 chmod +x "$FAKE/bin/"*
 echo "$sha" > "$FAKE/known"
+: > "$FAKE/local"
 
-run() { : > "$FAKE/calls"; PATH="$FAKE/bin:$PATH" "$deploy" "$@" > /dev/null 2>&1; }
+run() { : > "$FAKE/calls"; PATH="$FAKE/bin:$PATH" "$deploy" "$@" < /dev/null > /dev/null 2>&1; }
+run_with_token() { : > "$FAKE/calls"; printf 'tok123' | PATH="$FAKE/bin:$PATH" "$deploy" "$@" > /dev/null 2>&1; }
 state() { sed -n "s/^$2=//p" "$AFFRAME_HOME/state/$1" 2> /dev/null; }
 route() { cat "$AFFRAME_HOME/traefik/dynamic/$1.yml" 2> /dev/null; }
 called() { grep -q -- "$1" "$FAKE/calls"; }
@@ -81,10 +94,21 @@ check "route unchanged" grep -q "afframe-placeholder-green:8080" <<< "$(route pl
 check "unhealthy container removed" called "rm -f afframe-placeholder-blue"
 echo ok > "$FAKE/health"
 
+check "previous image kept for rollback" grep -q "^$v1 " "$FAKE/local"
 check "rollback" run rollback placeholder
 check "back on v1" test "$(state placeholder current) $(state placeholder previous)" == "$v1 $v2"
+check "rollback uses the local image, no pull" fails called "pull"
 check "rollback skips migrations and checkout" fails called "fetch"
 check "rollback of a service without history fails" fails run rollback unknown
+
+check "deploy with a token logs in to the registry" run_with_token deploy "$sha" "placeholder=$(digest placeholder 4)"
+check "login to ghcr.io from stdin" called "login ghcr.io -u token --password-stdin"
+check "token passed on stdin, not argv" test "$(cat "$FAKE/login-password")" == tok123
+check "token never on a command line" fails grep -q tok123 "$FAKE/calls"
+check "images that are neither current nor previous are removed" fails grep -q "^$(digest placeholder 2) " "$FAKE/local"
+check "current and previous images stay, even sharing an image ID" grep -q "^$v1 " "$FAKE/local"
+check "deploy without a token" run deploy "$sha" "placeholder=$(digest placeholder 4)"
+check "no login without a token" fails called "login"
 
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} test(s) failed"

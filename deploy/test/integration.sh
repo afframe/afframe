@@ -39,6 +39,8 @@ serves() {
   [[ "$(curl -sk -o /dev/null -w '%{http_code}' --resolve "afframe.com:$AFFRAME_HTTPS_PORT:127.0.0.1" \
     "https://afframe.com:$AFFRAME_HTTPS_PORT/health")" == 200 ]]
 }
+# stdin from /dev/null: no registry token (the local registry needs none).
+deploy_cmd() { "$bin/afframe-deploy" "$@" < /dev/null; }
 psql_prod() { docker exec -u postgres afframe-postgres psql -U afframe -d afframe -Atc "$1"; }
 
 echo "== fixtures"
@@ -77,28 +79,28 @@ printf 'FROM nginx:1.30.5-alpine\n' > "$work/broken/Dockerfile" # listens on 80,
 broken="$(push broken "$work/broken")"
 
 echo "== deploy"
-check "first deploy" "$bin/afframe-deploy" deploy "$sha" "placeholder=$img1"
+check "first deploy" deploy_cmd deploy "$sha" "placeholder=$img1"
 check "served through Traefik" serves
 check "state blue v1" test "$(state colour) $(state current)" == "blue $img1"
 check "app env from Vault" test "$(docker exec afframe-placeholder-blue printenv GREETING)" == hello
 
-check "second deploy" "$bin/afframe-deploy" deploy "$sha" "placeholder=$img2"
+check "second deploy" deploy_cmd deploy "$sha" "placeholder=$img2"
 check "switched to green v2" test "$(state colour) $(state current) $(state previous)" == "green $img2 $img1"
 check "old colour removed" fails docker inspect afframe-placeholder-blue
 check "still served" serves
 
-check "unhealthy image is refused" fails "$bin/afframe-deploy" deploy "$sha" "placeholder=$broken"
+check "unhealthy image is refused" fails deploy_cmd deploy "$sha" "placeholder=$broken"
 check "traffic stays on v2" test "$(state colour) $(state current)" == "green $img2"
 check "unhealthy container removed" fails docker inspect afframe-placeholder-blue
 check "served after refusal" serves
 
-check "rollback" "$bin/afframe-deploy" rollback placeholder
+check "rollback" deploy_cmd rollback placeholder
 check "back on v1" test "$(state current) $(state previous)" == "$img1 $img2"
 check "served after rollback" serves
 
-check "foreign registry is refused" fails "$bin/afframe-deploy" deploy "$sha" \
+check "foreign registry is refused" fails deploy_cmd deploy "$sha" \
   "placeholder=docker.io/library/nginx@sha256:$(printf '0%.0s' {1..64})"
-check "unknown commit is refused" fails "$bin/afframe-deploy" deploy "$(printf 'a%.0s' {1..40})"
+check "unknown commit is refused" fails deploy_cmd deploy "$(printf 'a%.0s' {1..40})"
 
 echo "== backup and restore"
 psql_prod "create table drill (x int); insert into drill values (42)" > /dev/null
