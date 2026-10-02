@@ -129,8 +129,9 @@ docker run --rm -v "$AFFRAME_HOME/dumps:/d" alpine:3 \
 check "drill refuses a truncated dump" drill_fails "pgBackRest restore ok"
 
 # Data older than the recovery point target, as if WAL archiving had stopped a day and a half ago.
+# No backup here: it would refresh the sentinel. `pgbackrest check` archives the current WAL.
 psql_prod "update ops.heartbeat set at = now() - interval '30 hours'" > /dev/null
-check "backup of stale data" "$bin/afframe-backup" diff
+check "stale data archived" docker exec -u postgres afframe-postgres pgbackrest check
 check "drill refuses stale data" drill_fails "pgBackRest restore: newest data is 30 h old"
 
 if ((failures > 0)); then

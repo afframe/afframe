@@ -2,8 +2,8 @@
 # Restore drill, monthly from afframe-restore-drill.timer. Restores the latest pgBackRest backup
 # (with WAL to the end of the archive) into a throwaway container from the production image and
 # waits until it is promoted; then restores the latest nightly dump (with its roles) into a second
-# throwaway container. Both must hold an ops.heartbeat sentinel (written nightly by afframe-dump)
-# younger than RPO_HOURS, which proves recent data came back, not just a database that starts.
+# throwaway container. Both must hold an ops.heartbeat sentinel (written by afframe-dump and
+# afframe-backup) younger than RPO_HOURS: recent data came back, not just a database that starts.
 # Nothing touches production. Reports to the BETTERSTACK_DRILL_HEARTBEAT URL.
 set -euo pipefail
 # shellcheck source=deploy/bin/common.sh
@@ -94,6 +94,7 @@ drill() {
   done
   ((i <= 300)) || { docker logs --tail 50 "$name" >&2; return 1; }
   sentinel "$name" "pgBackRest restore" || return 1
+  cleanup # one restored database on disk at a time
   dump_drill || return 1
 }
 

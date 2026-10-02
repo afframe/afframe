@@ -13,6 +13,8 @@ if [[ -z "$type" ]]; then
 fi
 [[ "$type" == full || "$type" == diff ]] || die "usage: afframe-backup [full|diff]"
 
+# Before the backup, so the backup carries a fresh sentinel for afframe-restore-drill.
+write_sentinel
 code=0
 output="$(docker exec -u postgres afframe-postgres pgbackrest --type="$type" backup 2>&1)" || code=$?
 echo "$output"
