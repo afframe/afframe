@@ -68,14 +68,14 @@ Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only
 ## 6. Deployment & Infrastructure
 
 - **Hosting:** afframe-vps, Hostinger KVM 2 (2 vCPU, 8 GB), Ubuntu 24.04 LTS, Docker. Traefik routes by file (no Docker socket) behind Cloudflare (Full strict, Origin CA certificate). Apps deploy blue/green by image digest with a `/health` gate and one-command rollback (`deploy/bin/afframe-deploy`). Runbook and host setup: `docs/vps.md`.
-- **CD:** `deploy.yml` on every push to `main`: `deploy-gate.sh` (label `no-deploy` / `[no deploy]` skips; API errors fail closed), `deploy-services.sh` (changed services), build and push `ghcr.io/afframe/afframe/<service>:sha-<sha>` with a provenance attestation, then `afframe-deploy` over Tailscale SSH. The only GitHub secrets are the three values needed to reach the tailnet (`production` environment); everything else lives in Vault.
+- **CD:** `deploy.yml` on every push to `main`: `deploy-gate.sh` (label `no-deploy` / `[no deploy]` skips; API errors fail closed), `deploy-services.sh` (changed services), build and push `ghcr.io/afframe/afframe/<service>:sha-<sha>` with a provenance attestation, then `afframe-deploy` over Tailscale SSH. GitHub holds only workflow secrets: `CLAUDE_CODE_OAUTH_TOKEN` (repository) and `TS_OAUTH_CLIENT_ID`, `TS_AUDIENCE`, `DEPLOY_HOST` (environment `production`, needed to reach the tailnet). Application and host runtime secrets live in Vault.
 - **Monitoring:** Better Stack free plan: uptime check of `/health`, heartbeats from the backup, dump, health and restore-drill timers, status page.
 - **CI:** GitHub-hosted runners only (free for public repos; self-hosted runners are unsafe on public repos). `ci` job aggregates `detect`, `pr-title` (Conventional Commits), `repo-lint` (actionlint, zizmor, `docker compose config` of the compose files, shellcheck, gitleaks, script tests), `build` (Docker Buildx, per-service GHA cache), `test` (`compose.ci.yml`). Slow checks run outside `ci`: `Deploy integration` (nightly, and advisory on PRs touching `deploy/`) and `Security scans` (nightly CodeQL for workflows, Trivy for the repo and images, OpenSSF Scorecard; findings in the Security tab).
 - **Branch protection:** ruleset on the default branch: PR required, `ci` required, squash only, linear history, no deletion or force-push, no bypass actors.
 
 ## 7. Security Considerations
 
-- Public repo: no secrets in git or GitHub. Runtime secrets come from Vault on oracle-vps at deploy time (read-only token on the host).
+- Public repo: no secrets in git. GitHub holds only workflow secrets: `CLAUDE_CODE_OAUTH_TOKEN` (repository) and `TS_OAUTH_CLIENT_ID`, `TS_AUDIENCE`, `DEPLOY_HOST` (environment `production`, needed to reach the tailnet). Application and host runtime secrets live in Vault. The host reads them at deploy time with a read-only token.
 - afframe-vps runs only `main`: `afframe-deploy` refuses commits not on `origin/main` and images outside `ghcr.io/afframe/afframe/<service>`.
 - Images on GHCR are private: the host pulls with the deploy run's own short-lived token (stdin, throwaway Docker config); no registry credential is stored anywhere.
 - Workflows default to `contents: read`; third-party actions are pinned to commit SHAs; `persist-credentials: false` on checkouts.
