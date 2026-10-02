@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # Restore drill, monthly from afframe-restore-drill.timer. Restores the latest pgBackRest backup
-# (with WAL to the end of the archive) into a throwaway container from the production image, waits
-# until it is promoted, and checks the afframe database answers. Nothing touches production.
-# Reports to the BETTERSTACK_DRILL_HEARTBEAT URL.
+# (with WAL to the end of the archive) into a throwaway container from the production image and
+# waits until it is promoted; then restores the latest nightly dump (with its roles) into a second
+# throwaway container. Both must hold an ops.heartbeat sentinel (written nightly by afframe-dump)
+# younger than RPO_HOURS, which proves recent data came back, not just a database that starts.
+# Nothing touches production. Reports to the BETTERSTACK_DRILL_HEARTBEAT URL.
 set -euo pipefail
 # shellcheck source=deploy/bin/common.sh
 source "$(dirname "$0")/common.sh"
 
 name=afframe-restore-drill
+dump_name=afframe-restore-drill-dump
+# Recovery point target: the sentinel is upserted nightly, so a healthy restore is under a day old.
+RPO_HOURS=26
+work="$(mktemp -d)"
 pgbackrest_env=(
   --env-file "$AFFRAME_HOME/env/infra.env"
   -e PGBACKREST_STANZA=afframe
@@ -20,8 +26,52 @@ pgbackrest_env=(
 )
 
 cleanup() {
-  docker rm -f "$name" > /dev/null 2>&1 || true
+  docker rm -f -v "$name" "$dump_name" > /dev/null 2>&1 || true
   docker volume rm "$name" > /dev/null 2>&1 || true
+}
+
+rclone() {
+  docker run --rm --env-file "$work/rclone.env" -v "$AFFRAME_HOME/dumps:/backup" \
+    "$RCLONE_IMAGE" --quiet "$@"
+}
+
+# sentinel <container> <what>: fails unless the restored ops.heartbeat is younger than RPO_HOURS.
+sentinel() {
+  local age
+  age="$(docker exec "$1" psql -U afframe -d afframe -v ON_ERROR_STOP=1 -Atc \
+    "select extract(epoch from now() - max(at))::bigint from ops.heartbeat")" \
+    || { echo "$2: no ops.heartbeat sentinel in the restored database" >&2; return 1; }
+  [[ -n "$age" ]] || { echo "$2: ops.heartbeat is empty" >&2; return 1; }
+  ((age <= RPO_HOURS * 3600)) || {
+    echo "$2: newest data is $((age / 3600)) h old, over the $RPO_HOURS h recovery point target" >&2
+    return 1
+  }
+  log "$2 ok: sentinel $((age / 60)) min old"
+}
+
+# dump_drill: restores the newest dump and its roles into a throwaway container without a network.
+dump_drill() {
+  local latest stamp i
+  dump_rclone_env "$work/rclone.env" || return 1
+  latest="$(rclone lsf --include 'afframe-*.dump' dumps: | sort | tail -n 1)" || return 1
+  [[ -n "$latest" ]] || { echo "no dump found" >&2; return 1; }
+  stamp="${latest#afframe-}"
+  stamp="${stamp%.dump}"
+  log "restore $latest into $dump_name"
+  docker run -d --name "$dump_name" --network none -e POSTGRES_USER=afframe -e POSTGRES_DB=afframe \
+    -e POSTGRES_HOST_AUTH_METHOD=trust afframe-postgres:local > /dev/null || return 1
+  # The image's init runs a socket-only server first; TCP answers once the real server is up.
+  for ((i = 1; i <= 60; i++)); do
+    docker exec "$dump_name" pg_isready -q -h 127.0.0.1 -U afframe && break
+    sleep 1
+  done
+  ((i <= 60)) || { docker logs --tail 50 "$dump_name" >&2; return 1; }
+  # The roles script recreates the existing afframe role; that one error is expected.
+  rclone cat "dumps:globals-$stamp.sql" | docker exec -i "$dump_name" psql -U afframe -d postgres -q \
+    > /dev/null 2>&1 || return 1
+  rclone cat "dumps:$latest" | docker exec -i "$dump_name" pg_restore -U afframe -d afframe --exit-on-error \
+    || return 1
+  sentinel "$dump_name" "dump restore" || return 1
 }
 
 drill() {
@@ -43,13 +93,11 @@ drill() {
     sleep 1
   done
   ((i <= 300)) || { docker logs --tail 50 "$name" >&2; return 1; }
-  local tables
-  tables="$(docker exec "$name" psql -U afframe -d afframe -Atc "select count(*) from pg_class")" || return 1
-  ((tables > 0)) || return 1
-  log "restore ok: afframe database answers ($tables relations)"
+  sentinel "$name" "pgBackRest restore" || return 1
+  dump_drill || return 1
 }
 
-trap cleanup EXIT
+trap 'cleanup; rm -rf "$work"' EXIT
 code=0
 output="$(drill 2>&1)" || code=$?
 echo "$output"

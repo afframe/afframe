@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Nightly logical dump next to pgBackRest: pg_dump of the afframe database (custom format) and the
 # roles (pg_dumpall --globals-only), encrypted with rclone crypt (DUMP_CRYPT_PASSWORD) and copied
-# to dumps/ in the backup bucket (the S3 settings pgBackRest uses; with PGBACKREST_REPO1_TYPE=posix,
-# as in deploy/test/integration.sh, to $AFFRAME_HOME/dumps). Reads the new dump back through the
-# encryption and lists it with pg_restore, then deletes dumps older than 30 days.
+# to dumps/ in the dump bucket (DUMP_S3_* settings, each falling back to the pgBackRest one; with
+# PGBACKREST_REPO1_TYPE=posix, as in deploy/test/integration.sh, to $AFFRAME_HOME/dumps). Reads the
+# new dump back through the encryption and lists it with pg_restore, then deletes dumps older than
+# 30 days. First it upserts the ops.heartbeat sentinel that afframe-restore-drill checks in both
+# the dump and the pgBackRest restore. The full restore of a dump is in afframe-restore-drill.
 # Runs from afframe-dump.timer; reports to the BETTERSTACK_DUMP_HEARTBEAT URL.
 set -euo pipefail
 # shellcheck source=deploy/bin/common.sh
 source "$(dirname "$0")/common.sh"
 
-RCLONE_IMAGE="rclone/rclone:1.75.1"
 KEEP_DAYS="${AFFRAME_DUMP_KEEP_DAYS:-30}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -19,37 +20,18 @@ rclone() {
     -v "$AFFRAME_HOME/dumps:/backup" "$RCLONE_IMAGE" --quiet "$@"
 }
 
-# rclone remotes from environment variables (never on a command line): `base` is the bucket or a
-# local directory, `dumps` the crypt layer on top of it.
-configure() {
-  local password
-  password="$(env_value DUMP_CRYPT_PASSWORD)"
-  [[ -n "$password" ]] || { echo "DUMP_CRYPT_PASSWORD missing in Vault infra" >&2; return 1; }
-  mkdir -p "$AFFRAME_HOME/dumps"
-  (
-    umask 077
-    if [[ "$(env_value PGBACKREST_REPO1_TYPE)" == s3 ]]; then
-      printf '%s\n' "RCLONE_CONFIG_BASE_TYPE=s3" "RCLONE_CONFIG_BASE_PROVIDER=Cloudflare" \
-        "RCLONE_CONFIG_BASE_ACCESS_KEY_ID=$(env_value PGBACKREST_REPO1_S3_KEY)" \
-        "RCLONE_CONFIG_BASE_SECRET_ACCESS_KEY=$(env_value PGBACKREST_REPO1_S3_KEY_SECRET)" \
-        "RCLONE_CONFIG_BASE_ENDPOINT=https://$(env_value PGBACKREST_REPO1_S3_ENDPOINT)" \
-        "RCLONE_CONFIG_BASE_NO_CHECK_BUCKET=true" \
-        "RCLONE_CONFIG_DUMPS_REMOTE=base:$(env_value PGBACKREST_REPO1_S3_BUCKET)/dumps"
-    else
-      printf '%s\n' "RCLONE_CONFIG_BASE_TYPE=local" "RCLONE_CONFIG_DUMPS_REMOTE=base:/backup"
-    fi > "$work/rclone.env"
-    echo "RCLONE_CONFIG_DUMPS_TYPE=crypt" >> "$work/rclone.env"
-    printf '%s' "$password" | docker run --rm -i "$RCLONE_IMAGE" obscure - \
-      | sed 's/^/RCLONE_CONFIG_DUMPS_PASSWORD=/' >> "$work/rclone.env"
-  )
-}
-
 # Called with `|| code=$?`, so errexit is off in here: every step returns on failure itself.
 run() {
   local stamp
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  configure || return 1
+  dump_rclone_env "$work/rclone.env" || return 1
   mkdir -p "$work/out"
+  log "heartbeat sentinel"
+  docker exec afframe-postgres psql -U afframe -d afframe -q -v ON_ERROR_STOP=1 -c "
+    create schema if not exists ops;
+    create table if not exists ops.heartbeat (id int primary key, at timestamptz not null);
+    insert into ops.heartbeat values (1, now()) on conflict (id) do update set at = excluded.at" \
+    || return 1
   log "pg_dump afframe-$stamp"
   docker exec afframe-postgres pg_dump -U afframe -Fc afframe > "$work/out/afframe-$stamp.dump" || return 1
   docker exec afframe-postgres pg_dumpall -U afframe --globals-only > "$work/out/globals-$stamp.sql" || return 1

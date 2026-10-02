@@ -39,3 +39,40 @@ heartbeat() {
     curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "${3:-}" "$url/$2" || echo "heartbeat $1 failed" >&2
   fi
 }
+
+RCLONE_IMAGE="rclone/rclone:1.75.1"
+
+# dump_rclone_env <file>: rclone remotes for the nightly dumps as environment variables, written to
+# <file> (mode 600, never on a command line). `base` is the bucket or a local directory mounted at
+# /backup, `dumps` the crypt layer on top of it. DUMP_S3_* point the dumps at their own bucket and
+# token; each one falls back to the pgBackRest setting.
+dump_rclone_env() {
+  local password
+  password="$(env_value DUMP_CRYPT_PASSWORD)"
+  [[ -n "$password" ]] || { echo "DUMP_CRYPT_PASSWORD missing in Vault infra" >&2; return 1; }
+  mkdir -p "$AFFRAME_HOME/dumps"
+  (
+    umask 077
+    if [[ "$(env_value PGBACKREST_REPO1_TYPE)" == s3 ]]; then
+      printf '%s\n' "RCLONE_CONFIG_BASE_TYPE=s3" "RCLONE_CONFIG_BASE_PROVIDER=Cloudflare" \
+        "RCLONE_CONFIG_BASE_ACCESS_KEY_ID=$(dump_setting KEY)" \
+        "RCLONE_CONFIG_BASE_SECRET_ACCESS_KEY=$(dump_setting KEY_SECRET)" \
+        "RCLONE_CONFIG_BASE_ENDPOINT=https://$(dump_setting ENDPOINT)" \
+        "RCLONE_CONFIG_BASE_NO_CHECK_BUCKET=true" \
+        "RCLONE_CONFIG_DUMPS_REMOTE=base:$(dump_setting BUCKET)/dumps"
+    else
+      printf '%s\n' "RCLONE_CONFIG_BASE_TYPE=local" "RCLONE_CONFIG_DUMPS_REMOTE=base:/backup"
+    fi > "$1"
+    echo "RCLONE_CONFIG_DUMPS_TYPE=crypt" >> "$1"
+    printf '%s' "$password" | docker run --rm -i "$RCLONE_IMAGE" obscure - \
+      | sed 's/^/RCLONE_CONFIG_DUMPS_PASSWORD=/' >> "$1"
+  )
+}
+
+# dump_setting <BUCKET|ENDPOINT|KEY|KEY_SECRET>: DUMP_S3_<name>, else PGBACKREST_REPO1_S3_<name>.
+dump_setting() {
+  local value
+  value="$(env_value "DUMP_S3_$1")"
+  [[ -n "$value" ]] || value="$(env_value "PGBACKREST_REPO1_S3_$1")"
+  printf '%s' "$value"
+}
