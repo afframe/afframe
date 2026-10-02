@@ -39,3 +39,51 @@ heartbeat() {
     curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "${3:-}" "$url/$2" || echo "heartbeat $1 failed" >&2
   fi
 }
+
+RCLONE_IMAGE="rclone/rclone:1.75.1"
+
+# dump_rclone_env <file>: rclone remotes for the nightly dumps as environment variables, written to
+# <file> (mode 600, never on a command line). `base` is the bucket or a local directory mounted at
+# /backup, `dumps` the crypt layer on top of it. With DUMP_S3_BUCKET set, all four DUMP_S3_*
+# settings point the dumps at their own bucket and token; without it, the pgBackRest ones are used.
+dump_rclone_env() {
+  local password s3=PGBACKREST_REPO1_S3_ key
+  password="$(env_value DUMP_CRYPT_PASSWORD)"
+  [[ -n "$password" ]] || { echo "DUMP_CRYPT_PASSWORD missing in Vault infra" >&2; return 1; }
+  if [[ -n "$(env_value DUMP_S3_BUCKET)" ]]; then
+    s3=DUMP_S3_
+    for key in ENDPOINT KEY KEY_SECRET; do
+      [[ -n "$(env_value "DUMP_S3_$key")" ]] \
+        || { echo "DUMP_S3_BUCKET is set, so DUMP_S3_$key is required in Vault infra" >&2; return 1; }
+    done
+  fi
+  mkdir -p "$AFFRAME_HOME/dumps"
+  (
+    umask 077
+    if [[ "$(env_value PGBACKREST_REPO1_TYPE)" == s3 ]]; then
+      printf '%s\n' "RCLONE_CONFIG_BASE_TYPE=s3" "RCLONE_CONFIG_BASE_PROVIDER=Cloudflare" \
+        "RCLONE_CONFIG_BASE_ACCESS_KEY_ID=$(env_value "${s3}KEY")" \
+        "RCLONE_CONFIG_BASE_SECRET_ACCESS_KEY=$(env_value "${s3}KEY_SECRET")" \
+        "RCLONE_CONFIG_BASE_ENDPOINT=https://$(env_value "${s3}ENDPOINT")" \
+        "RCLONE_CONFIG_BASE_NO_CHECK_BUCKET=true" \
+        "RCLONE_CONFIG_DUMPS_REMOTE=base:$(env_value "${s3}BUCKET")/dumps"
+    else
+      printf '%s\n' "RCLONE_CONFIG_BASE_TYPE=local" "RCLONE_CONFIG_DUMPS_REMOTE=base:/backup"
+    fi > "$1"
+    echo "RCLONE_CONFIG_DUMPS_TYPE=crypt" >> "$1"
+    printf '%s' "$password" | docker run --rm -i "$RCLONE_IMAGE" obscure - \
+      | sed 's/^/RCLONE_CONFIG_DUMPS_PASSWORD=/' >> "$1"
+  )
+}
+
+# write_sentinel: upserts the ops.heartbeat row that afframe-restore-drill checks in every restore.
+# afframe-dump and afframe-backup both call it, so either job alone keeps it fresh. A failure
+# (read-only or locked database) only warns: the backup or dump itself matters more.
+write_sentinel() {
+  log "heartbeat sentinel"
+  docker exec afframe-postgres psql -U afframe -d afframe -q -v ON_ERROR_STOP=1 -c "
+    create schema if not exists ops;
+    create table if not exists ops.heartbeat (id int primary key, at timestamptz not null);
+    insert into ops.heartbeat values (1, now()) on conflict (id) do update set at = excluded.at" \
+    || echo "warning: ops.heartbeat sentinel not written; the restore drill will report stale data" >&2
+}
