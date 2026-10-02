@@ -30,7 +30,8 @@ if [[ "$1" == exec && "$2" == afframe-traefik ]]; then [[ "$(cat "$FAKE/health")
 forget() { grep -vxF -- "$1" "$FAKE/containers" > "$FAKE/containers.tmp"; mv "$FAKE/containers.tmp" "$FAKE/containers"; }
 if [[ "$1" == stop || "$1" == rm ]] && [[ "$(cat "$FAKE/remove")" == fail ]]; then exit 1; fi
 if [[ "$1" == rm ]]; then forget "${@: -1}"; fi
-if [[ "$1" == run && "$*" == *" --name "* ]]; then name="${*#* --name }"; echo "${name%% *}" >> "$FAKE/containers"; fi
+args="$*"
+if [[ "$1" == run && "$args" == *" --name "* ]]; then name="${args#* --name }"; echo "${name%% *}" >> "$FAKE/containers"; fi
 if [[ "$1" == run && "$*" == *" migrate up" && "$(cat "$FAKE/migrate")" == hang ]]; then exec /bin/sleep 5; fi
 if [[ "$1" == run && "$*" == *" --rm "* && "$*" == *" --name "* ]]; then forget "${name%% *}"; fi
 # Images present locally: "<reference> <image id>" lines in $FAKE/local; `docker pull` adds one.
