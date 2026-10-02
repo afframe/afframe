@@ -14,7 +14,7 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and the prod
 
 ## Commands
 
-- Gate: `bash scripts/ci/repo-lint.sh` (actionlint, zizmor, `docker compose config` of the compose files, shellcheck, gitleaks, every `*.test.sh`; needs a running Docker daemon). CI also checks the PR title (Conventional Commits, `scripts/ci/pr-title.sh`): the squash merge uses it as the commit subject.
+- Gate before pushing: `bash scripts/ci/local-gate.sh` (needs a running Docker daemon). It runs what CI runs: `scripts/ci/repo-lint.sh` (actionlint, zizmor, `docker compose config` of the compose files, shellcheck, gitleaks, every `*.test.sh`), then, once `compose.ci.yml` exists, its `migrate` and `test` in a throwaway project. CI also checks the PR title (Conventional Commits, `scripts/ci/pr-title.sh`): the squash merge uses it as the commit subject.
 - One script's tests: `bash <path>.test.sh`, for example `bash deploy/test/afframe-deploy.test.sh`.
 - Production stack end to end (slow, needs Docker; nightly in CI, never on afframe-vps): `bash deploy/test/integration.sh`.
 - Dev stack: Conductor Run → `dev`, or `CONDUCTOR_PORT=<port> bash scripts/dev/stack.sh up`; archive runs `stack.sh down`. Conductor setup runs `scripts/dev/setup.sh`: each app's dependencies installed on the host by lockfile, only so editor and Claude Code hooks work (a missing package manager is skipped). On Hleb's Mac, Docker points at the Dev Docker daemon on oracle-vps (configured outside this repo, don't change it); published ports appear on `localhost`. Web on `$CONDUCTOR_PORT`, Postgres on `+1` (user, password and database `afframe`).
