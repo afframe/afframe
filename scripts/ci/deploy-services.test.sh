@@ -10,12 +10,19 @@ trap 'rm -rf "$repo" "$fake"' EXIT
 failures=0
 
 # Fake gh: answers `gh api [--paginate] repos/o/r/<path> --jq <filter>` by applying the filter to
-# $FAKE/<path>.json (query string dropped, `/` as `_`). A $FAKE/fail file makes every call fail.
+# $FAKE/<path>.json (query string dropped, `/` as `_`). A $FAKE/fail file makes every call fail;
+# a $FAKE/flaky file makes the next call fail once. Listing deployments without the production
+# environment filter fails.
 mkdir -p "$fake/bin"
 cat > "$fake/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 [[ -e "$FAKE/fail" ]] && { echo "HTTP 502" >&2; exit 1; }
+[[ -e "$FAKE/flaky" ]] && { rm "$FAKE/flaky"; echo "HTTP 502" >&2; exit 1; }
 [[ "$2" == --paginate ]] && shift
+if [[ "$2" == repos/o/r/deployments\?* && "$2" != *[?\&]environment=production\&* && "$2" != *[?\&]environment=production ]]; then
+  echo "fake gh: deployments listed without environment=production" >&2
+  exit 1
+fi
 path="${2#repos/o/r/}"
 path="${path%%\?*}"
 jq -r "$4" "$FAKE/${path//\//_}.json"
@@ -80,6 +87,11 @@ deployments "8=$c7=error,in_progress" "7=$c6=failure,in_progress" "6=$c5=inactiv
 expect "failed, cancelled and skipped changes are carried into the next deploy" 'services=["api","web"] infra=true ' "$c9"
 deployments "9=$c7=failure" "6=$c5=inactive,success"
 expect "only changes since the last success are planned" 'services=["web"] infra=true ' "$c7"
+deployments "6=$c5=inactive,success" "9=$c6=success"
+expect "deployments are scanned newest id first" 'services=[] infra=true ' "$c7"
+deployments "9=$c7=failure" "6=$c5=inactive,success"
+touch "$fake/flaky"
+expect "one API error is retried" 'services=["web"] infra=true ' "$c7"
 deployments "10=$(printf 'f%.0s' {1..40})=success"
 expect "base unknown to git deploys everything" 'services=["api","web"] infra=true ' "$c9"
 
