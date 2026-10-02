@@ -2,9 +2,10 @@ name: Deploy
 
 # Every push to main: build the changed services to GHCR and deploy them to afframe-vps
 # (docs/vps.md). Target: about a minute from merge to live, no long checks in the way.
-# No GitHub secrets: the runner joins the tailnet with Tailscale workload identity (OIDC), reaches
-# the host over Tailscale SSH, and the host reads runtime secrets from Vault.
-# The deploy job runs only once the repository variable AFFRAME_VPS_ENABLED is `true`.
+# The runner joins the tailnet with Tailscale workload identity (OIDC) and reaches the host over
+# Tailscale SSH; the host reads runtime secrets from Vault. The three values needed before the
+# tailnet (and so Vault) is reachable are secrets of the `production` environment, so they never
+# appear in this public repo or its logs: TS_OAUTH_CLIENT_ID, TS_AUDIENCE, DEPLOY_HOST.
 on:
   push:
     branches: [main]
@@ -92,7 +93,7 @@ jobs:
   deploy:
     needs: [plan, build]
     if: >-
-      !cancelled() && needs.build.result != 'failure' && vars.AFFRAME_VPS_ENABLED == 'true'
+      !cancelled() && needs.build.result != 'failure'
       && needs.plan.outputs.deploy == 'true'
       && (needs.plan.outputs.services != '[]' || needs.plan.outputs.infra == 'true')
     runs-on: ubuntu-latest
@@ -125,12 +126,12 @@ jobs:
           echo "specs=${specs[*]}" | tee -a "$GITHUB_OUTPUT"
       - uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
         with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ vars.TS_AUDIENCE }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
           tags: tag:ci-afframe
       - name: Deploy over Tailscale SSH
         env:
-          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           SPECS: ${{ steps.images.outputs.specs }}
           REGISTRY_TOKEN: ${{ github.token }}
         run: |
