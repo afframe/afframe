@@ -16,7 +16,7 @@ cat > "$tmp/bin/git" <<FAKE
 echo "\$PWD"
 FAKE
 chmod +x "$tmp/bin/git"
-for tool in pnpm npm uv; do
+for tool in pnpm npm bun uv; do
   cat > "$tmp/bin/$tool" <<FAKE
 #!$(command -v bash)
 echo "ran in \${PWD##*/}: $tool \$*"
@@ -51,13 +51,17 @@ expect() {
 
 expect 0 "" "no apps folder is a silent no-op" "$(new_repo)"
 expect 0 "" "apps without lockfiles are a silent no-op" "$(new_repo placeholder/Dockerfile)"
-expect 0 "ran in web: pnpm install --frozen-lockfile" "pnpm lockfile runs a frozen install in the app" \
+expect 0 "ran in web: pnpm install --frozen-lockfile --ignore-scripts" \
+  "pnpm lockfile runs a frozen install in the app without scripts" \
   "$(new_repo web/pnpm-lock.yaml)"
-expect 0 "ran in site: npm ci" "npm lockfile runs npm ci" "$(new_repo site/package-lock.json)"
-expect 0 "ran in api: uv sync --frozen" "uv lockfile runs uv sync" "$(new_repo api/uv.lock)"
+expect 0 "ran in site: npm ci --ignore-scripts" "npm lockfile runs npm ci without scripts" "$(new_repo site/package-lock.json)"
+expect 0 "ran in api: uv sync --frozen --no-install-workspace --no-build" \
+  "uv lockfile runs uv sync without building anything" "$(new_repo api/uv.lock)"
+expect 0 "ran in app: bun install --frozen-lockfile --ignore-scripts" "bun lockfile runs without scripts" \
+  "$(new_repo app/bun.lock)"
 expect 0 "setup: apps/api: cargo not found, skipped (Cargo.lock)" "missing tool prints one line" \
   "$(new_repo api/Cargo.lock)"
-expect 0 "ran in web: pnpm install --frozen-lockfile" "missing tool does not stop the next app" \
+expect 0 "ran in web: pnpm install --frozen-lockfile --ignore-scripts" "missing tool does not stop the next app" \
   "$(new_repo api/Cargo.lock web/pnpm-lock.yaml)"
 
 if [[ "$failures" -gt 0 ]]; then
