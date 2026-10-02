@@ -14,6 +14,7 @@ afframe/
 │   └── dependabot.yml         # Updates for pinned actions and base images
 ├── .conductor/settings.toml   # Conductor: dev stack run button and archive cleanup
 ├── compose.dev.yml            # Dev stack per workspace
+├── compose.ci.yml             # Service tests run by CI (`test`)
 ├── scripts/ci/                # repo-lint.sh (gate), pr-title.sh, deploy-gate.sh, deploy-services.sh, trivy-scan.sh (+ tests)
 ├── scripts/dev/               # stack.sh (+ tests)
 ├── deploy/                    # Production on afframe-vps: compose, Traefik, Postgres image, host scripts
@@ -87,7 +88,7 @@ Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only
 
 - Local gate: `bash scripts/ci/repo-lint.sh` (Docker required).
 - Dev stack per Conductor workspace: `compose.dev.yml` (placeholder + `postgres:18`) through `scripts/dev/stack.sh`, one compose project `afframe-<workspace>` each. On Hleb's Mac it runs on the Dev Docker daemon on oracle-vps. No per-PR preview environments.
-- Service tests: `docker compose -p <name> -f compose.ci.yml run --rm test` once a service defines them.
+- Service tests: `docker compose -p <name> -f compose.ci.yml run --rm test` (today: the placeholder contract check). CI fails when a deployable service exists without `compose.ci.yml`.
 
 ## 9. Future Considerations / Roadmap
 

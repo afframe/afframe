@@ -24,6 +24,7 @@ AFFRAME_HOME="$compose_home" docker compose -f deploy/compose.prod.yml config --
   | jq -e '.services.postgres.volumes[] | select(.source == "postgres-data" and .target == "/var/lib/postgresql")' > /dev/null \
   || { echo "postgres must keep its data in the postgres-data volume" >&2; exit 1; }
 WEB_PORT=1 DB_PORT=2 docker compose -f compose.dev.yml config -q
+if [[ -f compose.ci.yml ]]; then docker compose -f compose.ci.yml config -q; fi
 rm -rf "$compose_home"
 
 echo "== shellcheck"
