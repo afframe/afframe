@@ -24,7 +24,6 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and the prod
 - Small PRs, one concern each, open for hours not days. Draft until ready.
 - `ci` is the only required check and must stay fast (about a minute). Squash merge once it is green; no merge queue. No one can bypass the ruleset.
 - Merge to `main` = deploy to afframe-vps in about a minute (`deploy.yml`: changed services only, blue/green, `/health` gate). Skip a deploy: label `no-deploy` or `[no deploy]` in the PR title. Rollback: `docs/vps.md`.
-- Deploys run only while the repository variable `AFFRAME_VPS_ENABLED` is `true`.
 - AI review: CodeRabbit reviews every PR when it leaves draft (`.coderabbit.yaml`); Claude on demand with label `claude-review` or `@claude`. Both advisory, never required.
 
 ## Service contract (what CI expects from `apps/<name>/`)
@@ -36,7 +35,7 @@ Public monorepo for the Afframe web apps. Pre-users v0: the CI gate and the prod
 
 ## Gotchas
 
-- Secrets never go in git, GitHub, or `VITE_*` and other build-time variables (those end up in public bundles). Runtime secrets live in Vault on oracle-vps (`secret/afframe/prod/{infra,app}`, see `docs/vps.md`).
+- Secrets never go in git or in `VITE_*` and other build-time variables (those end up in public bundles). Runtime secrets live in Vault on oracle-vps (`secret/afframe/prod/{infra,app}`, see `docs/vps.md`). GitHub holds only the workflow secrets `CLAUDE_CODE_OAUTH_TOKEN` and the three `production` environment secrets for the tailnet.
 - Slow checks (integration, scans) never join the required `ci`; they run nightly or on demand.
 - No per-PR preview environments: test on the dev stack; CI tests the built image.
 
