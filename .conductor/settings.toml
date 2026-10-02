@@ -1,6 +1,8 @@
 "$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
 
 [scripts]
+# Host dependencies of each app, by lockfile, for editor and Claude Code hooks (scripts/dev/setup.sh).
+setup = "bash scripts/dev/setup.sh"
 # Each workspace runs its own dev stack on its own ports (scripts/dev/stack.sh).
 run_mode = "concurrent"
 archive = "bash scripts/dev/stack.sh down"
