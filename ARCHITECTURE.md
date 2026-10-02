@@ -52,7 +52,7 @@ nginx serving a static page and `/health`. Exists only to exercise build and dep
 
 ## 4. Data Stores
 
-Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only. pgBackRest archives WAL continuously and takes a daily backup (full on Sundays) to Cloudflare R2, encrypted, 4 full backups kept: point-in-time recovery over about 4 weeks. A nightly `pg_dump` (rclone-crypt encrypted, 30 days, verified with `pg_restore --list`) goes to the same bucket as a second, independent copy. A monthly restore drill restores into a throwaway container. Schema changes: expand/contract, run as pre-deploy migrations.
+Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only. pgBackRest archives WAL continuously and takes a daily backup (full on Sundays) to Cloudflare R2, encrypted, 4 full backups kept: point-in-time recovery over about 4 weeks. A nightly `pg_dump` (rclone-crypt encrypted, 30 days) is a second copy in a different format; by default it goes to the same bucket with the same token, so it is independent of pgBackRest but not of a lost bucket or a leaked token until the `DUMP_S3_*` settings point it at its own locked bucket (`docs/vps.md`). Each dump first upserts a sentinel row (`ops.heartbeat`). A monthly restore drill restores both the latest pgBackRest backup and the latest dump into throwaway containers and fails unless each holds a sentinel under 26 hours old. Schema changes: expand/contract, run as pre-deploy migrations.
 
 ## 5. External Integrations / APIs
 
