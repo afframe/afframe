@@ -51,9 +51,9 @@ The GHCR packages `afframe/<service>` stay private. The deploy job pipes its own
 1. Fetches `origin/main` and checks out `<git-sha>` (refused unless it is on `main`).
 2. Renders secrets from Vault (`deploy/bin/vault-env`), copies `deploy/traefik/dynamic/`.
 3. `docker compose up -d --wait` for Traefik and Postgres; `pgbackrest stanza-create` (idempotent).
-4. Per service: pull by digest, run `MIGRATE` from the manifest in the new image (abort on failure), start the idle colour, wait for `GET /health`, point the Traefik route at it, remove the old colour.
+4. Per service: pull by digest, run `MIGRATE` from the manifest in the new image as container `afframe-<service>-migrate` (abort on failure or after 300 s, `AFFRAME_MIGRATE_TIMEOUT`; killed 10 s later if it ignores TERM, then the container is removed), start the idle colour, wait for `GET /health`, point the Traefik route at it and record it in `state/<service>`, stop the old colour (30 s grace) and remove it. A failed removal only warns: traffic and state already point at the new colour.
 
-A failed migration or health check exits non-zero and traffic stays on the running container. Only images from `ghcr.io/afframe/afframe/<service>` are accepted. One deploy at a time (`flock`).
+A failed or timed-out migration or a failed health check exits non-zero and traffic stays on the running container. Only images from `ghcr.io/afframe/afframe/<service>` are accepted. One deploy at a time (`flock`).
 
 Rollback to the previous image (no migrations, no checkout):
 

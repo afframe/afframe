@@ -5,8 +5,9 @@
 #   afframe-deploy rollback <service>
 # deploy: checks out <git-sha> (must be on origin/main), renders secrets from Vault, brings up
 # Traefik and Postgres, then per service: pull, migrate, start the idle colour, wait for /health,
-# point Traefik at it, remove the old colour. A failed migration or health check leaves traffic
-# on the running container. rollback: the previous image again, without migrations.
+# point Traefik at it, stop the old colour. A failed or timed-out migration or a failed health
+# check leaves traffic on the running container. rollback: the previous image again, without
+# migrations.
 # Images are private: `deploy` reads a registry token on stdin (the workflow run's own short-lived
 # GITHUB_TOKEN) and logs in only for the pulls, in a throwaway Docker config. The current and
 # previous image of each service stay on the host, so rollback needs no registry access.
@@ -16,6 +17,7 @@ source "$(dirname "$0")/common.sh"
 
 REGISTRY="${AFFRAME_REGISTRY:-ghcr.io/afframe/afframe}"
 HEALTH_TRIES="${AFFRAME_HEALTH_TRIES:-60}"
+MIGRATE_TIMEOUT="${AFFRAME_MIGRATE_TIMEOUT:-300}" # seconds
 export AFFRAME_HOME
 
 compose() { docker compose -p afframe -f "$REPO/deploy/compose.prod.yml" "$@"; }
@@ -61,7 +63,7 @@ prepare() {
   mkdir -p "$AFFRAME_HOME"/{env,tls,state,traefik/dynamic}
   if [[ -f /etc/afframe/vault.env ]]; then
     set -a
-    # shellcheck disable=SC1091
+    # shellcheck disable=SC1091 # host file outside the repo, not available to shellcheck
     source /etc/afframe/vault.env
     set +a
   fi
@@ -87,8 +89,17 @@ deploy_service() {
   fi
   if [[ "$migrate" == yes && -n "$MIGRATE" ]]; then
     log "$service: migrate"
+    # A fixed name, so a migration left behind by a killed deploy is removed before the next one.
+    local migration="afframe-$service-migrate"
+    docker rm -f "$migration" > /dev/null 2>&1 || true
+    # TERM after the timeout, KILL 10 s later (a migration ignoring TERM would keep the client
+    # waiting); then the named container goes too, as killing the client does not stop it.
     # shellcheck disable=SC2086 # MIGRATE is a command line from the manifest
-    docker run --rm --network afframe-db --env-file "$AFFRAME_HOME/env/app.env" "$image" $MIGRATE
+    if ! timeout -k 10 "$MIGRATE_TIMEOUT" docker run --rm --name "$migration" --network afframe-db \
+      --env-file "$AFFRAME_HOME/env/app.env" "$image" $MIGRATE; then
+      docker rm -f "$migration" > /dev/null 2>&1 || true
+      die "$service: migration failed or timed out; traffic stays on ${current:-nothing}"
+    fi
   fi
 
   local new=blue
@@ -130,9 +141,14 @@ http:
           - url: http://$name:$PORT
 YAML
   mv "$route.tmp" "$route"
-  sleep 2 # Traefik's file watcher picks the change up within about a second
-  [[ -n "$colour" ]] && docker rm -f "$old" > /dev/null 2>&1
   printf 'current=%s\ncolour=%s\nprevious=%s\n' "$image" "$new" "$current" > "$state"
+  sleep 2 # Traefik's file watcher picks the change up within about a second
+  if [[ -n "$colour" ]]; then
+    # Graceful stop lets in-flight requests finish. Traffic and state already point at the new
+    # colour, so a leftover old container is only reported; the next deploy replaces it.
+    docker stop -t 30 "$old" > /dev/null 2>&1 || true
+    docker rm -f "$old" > /dev/null 2>&1 || echo "warning: could not remove $old" >&2
+  fi
   log "$service: live on $name"
 }
 
