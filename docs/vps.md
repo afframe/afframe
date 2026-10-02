@@ -26,6 +26,7 @@ Host layout, all owned by the `deploy` user:
 ├── tls/origin.{crt,key}  # Cloudflare Origin CA certificate, from Vault
 ├── traefik/dynamic/      # tls.yml + one route file per service, written by afframe-deploy
 ├── state/<service>       # current image, colour, previous image
+├── state/.infra          # hash of the infrastructure inputs at the last successful apply
 └── dumps/                # only with a posix pgBackRest repo (tests); in production dumps go to R2
 ```
 
@@ -50,10 +51,11 @@ The GHCR packages `afframe/<service>` stay private. The deploy job pipes its own
 
 1. Fetches `origin/main` and checks out `<git-sha>` (refused unless it is on `main`).
 2. Renders secrets from Vault (`deploy/bin/vault-env`), copies `deploy/traefik/dynamic/`.
-3. `docker compose up -d --wait` for Traefik and Postgres; `pgbackrest stanza-create` (idempotent).
-4. Per service: pull by digest, run `MIGRATE` from the manifest in the new image as container `afframe-<service>-migrate` (abort on failure or after 300 s, `AFFRAME_MIGRATE_TIMEOUT`; killed 10 s later if it ignores TERM, then the container is removed), start the idle colour, wait for `GET /health`, point the Traefik route at it and record it in `state/<service>`, stop the old colour (30 s grace) and remove it. A failed removal only warns: traffic and state already point at the new colour.
+3. `docker compose up -d --wait` for Traefik and Postgres; `pgbackrest stanza-create` (idempotent). Only when the infrastructure inputs (`deploy/compose.prod.yml`, `deploy/postgres/`, `deploy/traefik/`, `env/infra.env`) changed since the last successful apply, or Traefik or Postgres is not running; otherwise an app deploy leaves them alone and does not touch R2.
+4. Per service: pull by digest, run `MIGRATE` from the manifest in the new image as container `afframe-<service>-migrate` (abort on failure or after 300 s, `AFFRAME_MIGRATE_TIMEOUT`; killed 10 s later if it ignores TERM, then the container is removed), start the idle colour, wait for `GET /health`.
+5. Only when every service passed step 4, per service: point the Traefik route at the new colour and record it in `state/<service>`, stop the old colour (30 s grace) and remove it. A failed removal only warns: traffic and state already point at the new colour.
 
-A failed or timed-out migration or a failed health check exits non-zero and traffic stays on the running container. Only images from `ghcr.io/afframe/afframe/<service>` are accepted. One deploy at a time (`flock`).
+A failed or timed-out migration or a failed health check exits non-zero, removes every new colour of the run and switches nothing: traffic stays on the running containers. Migrations of services that passed step 4 stay applied (expand/contract keeps the old code working). Only images from `ghcr.io/afframe/afframe/<service>` are accepted. One deploy at a time (`flock`).
 
 Rollback to the previous image (no migrations, no checkout):
 
