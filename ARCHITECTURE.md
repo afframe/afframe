@@ -77,6 +77,7 @@ Postgres 18 on afframe-vps (`deploy/postgres/Dockerfile`), internal network only
 
 - Public repo: no secrets in git or GitHub. Runtime secrets come from Vault on oracle-vps at deploy time (read-only token on the host).
 - afframe-vps runs only `main`: `afframe-deploy` refuses commits not on `origin/main` and images outside `ghcr.io/afframe/afframe/<service>`.
+- Images on GHCR are private: the host pulls with the deploy run's own short-lived token (stdin, throwaway Docker config); no registry credential is stored anywhere.
 - Workflows default to `contents: read`; third-party actions are pinned to commit SHAs; `persist-credentials: false` on checkouts.
 - The review action only runs for same-repo PRs.
 - gitleaks runs on every PR over the full history.

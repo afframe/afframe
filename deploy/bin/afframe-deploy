@@ -7,6 +7,9 @@
 # Traefik and Postgres, then per service: pull, migrate, start the idle colour, wait for /health,
 # point Traefik at it, remove the old colour. A failed migration or health check leaves traffic
 # on the running container. rollback: the previous image again, without migrations.
+# Images are private: `deploy` reads a registry token on stdin (the workflow run's own short-lived
+# GITHUB_TOKEN) and logs in only for the pulls, in a throwaway Docker config. The current and
+# previous image of each service stay on the host, so rollback needs no registry access.
 set -euo pipefail
 # shellcheck source=deploy/bin/common.sh
 source "$(dirname "$0")/common.sh"
@@ -16,6 +19,29 @@ HEALTH_TRIES="${AFFRAME_HEALTH_TRIES:-60}"
 export AFFRAME_HOME
 
 compose() { docker compose -p afframe -f "$REPO/deploy/compose.prod.yml" "$@"; }
+
+# login_from_stdin: logs in to the registry with a token piped on stdin (none: no login).
+login_from_stdin() {
+  [[ -t 0 ]] && return 0
+  local token
+  token="$(cat)"
+  [[ -n "$token" ]] || return 0
+  DOCKER_CONFIG="$(mktemp -d)"
+  export DOCKER_CONFIG
+  trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+  docker login "${REGISTRY%%/*}" -u token --password-stdin <<< "$token" > /dev/null
+}
+
+# prune_images: removes registry images that are neither current nor previous for any service.
+prune_images() {
+  local keep ref id
+  keep="$(cat "$AFFRAME_HOME"/state/* 2> /dev/null | sed -n 's/^\(current\|previous\)=//p')"
+  docker image ls --digests --format '{{.Repository}}@{{.Digest}} {{.ID}}' \
+    | while read -r ref id; do
+      [[ "$ref" == "$REGISTRY/"* ]] || continue
+      grep -qxF "$ref" <<< "$keep" || docker image rm -f "$id" > /dev/null 2>&1 || true
+    done
+}
 
 valid_service() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]]; }
 
@@ -54,8 +80,10 @@ deploy_service() {
   read_vars "$manifest" HOST PORT MEMORY MIGRATE
   read_vars "$state" current colour previous
 
-  log "$service: pull $image"
-  docker pull -q "$image" > /dev/null
+  if ! docker image inspect "$image" > /dev/null 2>&1; then
+    log "$service: pull $image"
+    docker pull -q "$image" > /dev/null
+  fi
   if [[ "$migrate" == yes && -n "$MIGRATE" ]]; then
     log "$service: migrate"
     # shellcheck disable=SC2086 # MIGRATE is a command line from the manifest
@@ -122,12 +150,13 @@ main() {
           die "invalid service image: $spec"
         fi
       done
+      login_from_stdin
       checkout "$sha"
       prepare
       for spec in "$@"; do
         deploy_service "${spec%%=*}" "${spec#*=}" yes
       done
-      docker image prune -f > /dev/null
+      prune_images
       log "deployed $sha"
       ;;
     rollback)

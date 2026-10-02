@@ -132,6 +132,9 @@ jobs:
         env:
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           SPECS: ${{ steps.images.outputs.specs }}
+          REGISTRY_TOKEN: ${{ github.token }}
         run: |
+          # The images are private: the host pulls them with this run's own token (packages: read),
+          # passed on stdin and valid only while the job runs.
           # shellcheck disable=SC2086 # SPECS is a space-separated list of validated service=image pairs
-          sudo tailscale ssh "deploy@$DEPLOY_HOST" /srv/afframe/repo/deploy/bin/afframe-deploy deploy "$GITHUB_SHA" $SPECS
+          printf '%s' "$REGISTRY_TOKEN" | sudo tailscale ssh "deploy@$DEPLOY_HOST" /srv/afframe/repo/deploy/bin/afframe-deploy deploy "$GITHUB_SHA" $SPECS
