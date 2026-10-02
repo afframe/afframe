@@ -6,7 +6,8 @@
 # deploy: checks out <git-sha> (must be on origin/main), renders secrets from Vault, brings up
 # Traefik and Postgres, then per service: pull, migrate, start the idle colour, wait for /health,
 # point Traefik at it, stop the old colour. A failed or timed-out migration or a failed health
-# check leaves traffic on the running container. rollback: the previous image again, without migrations.
+# check leaves traffic on the running container. rollback: the previous image again, without
+# migrations.
 # Images are private: `deploy` reads a registry token on stdin (the workflow run's own short-lived
 # GITHUB_TOKEN) and logs in only for the pulls, in a throwaway Docker config. The current and
 # previous image of each service stay on the host, so rollback needs no registry access.
@@ -95,7 +96,7 @@ deploy_service() {
     if ! timeout "$MIGRATE_TIMEOUT" docker run --rm --name "$migration" --network afframe-db \
       --env-file "$AFFRAME_HOME/env/app.env" "$image" $MIGRATE; then
       docker rm -f "$migration" > /dev/null 2>&1 || true
-      die "$service: migration failed or timed out (${MIGRATE_TIMEOUT}s); traffic stays on ${current:-nothing}"
+      die "$service: migration failed or timed out; traffic stays on ${current:-nothing}"
     fi
   fi
 
