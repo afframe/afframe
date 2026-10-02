@@ -1,0 +1,40 @@
+# Example compose.ci.yml. Copy to the repo root when the first app has tests; CI runs it with
+# `docker compose -p ci-<run> -f compose.ci.yml run --rm` (migrate if defined, then test), and so
+# does scripts/ci/local-gate.sh. Rename `web` to the service folder under apps/. Throwaway: no
+# volumes for Postgres, no restart policies.
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: afframe
+      POSTGRES_PASSWORD: afframe
+      POSTGRES_DB: afframe
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U afframe -d afframe"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # The production image (default Dockerfile target) running the same command as MIGRATE in
+  # deploy/services/web.env, so CI applies the migrations exactly as the deploy will.
+  migrate:
+    build: apps/web
+    command: ["node", "dist/migrate.js"]
+    environment:
+      DATABASE_URL: postgres://afframe:afframe@postgres:5432/afframe
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # A `test` stage in the Dockerfile with dev dependencies. Lint, then typecheck, then unit tests;
+  # the first failure stops the run and its exit code is the result.
+  test:
+    build:
+      context: apps/web
+      target: test
+    command: ["sh", "-c", "pnpm lint && pnpm typecheck && pnpm test"]
+    environment:
+      DATABASE_URL: postgres://afframe:afframe@postgres:5432/afframe
+    depends_on:
+      postgres:
+        condition: service_healthy
