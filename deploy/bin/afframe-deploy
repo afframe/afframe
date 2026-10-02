@@ -32,14 +32,15 @@ login_from_stdin() {
   docker login "${REGISTRY%%/*}" -u token --password-stdin <<< "$token" > /dev/null
 }
 
-# prune_images: removes registry images that are neither current nor previous for any service.
+# prune_images: removes registry image references that are neither current nor previous for any
+# service. By reference, never by image ID: one ID can carry a kept and a stale digest.
 prune_images() {
-  local keep ref id
+  local keep ref
   keep="$(cat "$AFFRAME_HOME"/state/* 2> /dev/null | sed -n 's/^\(current\|previous\)=//p')"
-  docker image ls --digests --format '{{.Repository}}@{{.Digest}} {{.ID}}' \
-    | while read -r ref id; do
+  docker image ls --digests --format '{{.Repository}}@{{.Digest}}' \
+    | while read -r ref; do
       [[ "$ref" == "$REGISTRY/"* ]] || continue
-      grep -qxF "$ref" <<< "$keep" || docker image rm -f "$id" > /dev/null 2>&1 || true
+      grep -qxF "$ref" <<< "$keep" || docker image rm "$ref" > /dev/null 2>&1 || true
     done
 }
 
