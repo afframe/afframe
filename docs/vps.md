@@ -123,4 +123,5 @@ Hostinger's weekly VM backups and its single snapshot are not a database backup;
 ## Tests
 
 - `bash deploy/test/afframe-deploy.test.sh`: fast, fake `docker` and `git`; part of the gate.
+- `bash deploy/test/vault-env.test.sh`: fast, fake `curl`; the Vault token stays off curl's command line; part of the gate.
 - `bash deploy/test/integration.sh`: the whole stack on a local Docker daemon (Vault dev server, local registry, deploy, failed health check, rollback, backup, health, dump, restore drill). Nightly and on PRs that touch `deploy/` (`Deploy integration` workflow, advisory). Never on afframe-vps.

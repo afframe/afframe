@@ -12,8 +12,9 @@ source "$(dirname "$0")/common.sh"
 umask 077
 mkdir -p "$AFFRAME_HOME/env" "$AFFRAME_HOME/tls"
 
+# The token goes to curl on stdin (-H @-), never on its command line, where `ps` would show it.
 read_kv() {
-  curl -fsS -m 10 -H "X-Vault-Token: $VAULT_TOKEN" "$VAULT_ADDR/v1/secret/data/afframe/prod/$1" \
+  curl -fsS -m 10 -H @- "$VAULT_ADDR/v1/secret/data/afframe/prod/$1" <<< "X-Vault-Token: $VAULT_TOKEN" \
     | jq -e '.data.data'
 }
 
