@@ -35,6 +35,11 @@ jobs:
             echo "has_compose_ci=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_compose_ci=false" >> "$GITHUB_OUTPUT"
+            # A skipped `test` counts as success, so a deployable service without tests must fail here.
+            if compgen -G 'deploy/services/*.env' > /dev/null; then
+              echo "::error::deploy/services/ has a deployable service but compose.ci.yml is missing."
+              exit 1
+            fi
           fi
 
   pr-title:

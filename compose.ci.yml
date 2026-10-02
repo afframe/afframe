@@ -1,0 +1,25 @@
+# Service tests run by ci.yml (`test`, exit code = result). CI only: no ports, no restart policies.
+# Today it checks the placeholder image against the service contract: it listens on $PORT (set to a
+# non-default value here) over IPv4 and IPv6 and answers GET /health with 2xx. Replace with the real
+# app's tests when apps/placeholder is deleted.
+services:
+  placeholder:
+    build: apps/placeholder
+    environment:
+      PORT: "9090"
+    # Docker may disable IPv6 in containers; turn it on so the [::1] check below is real.
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: 0
+
+  test:
+    build: apps/placeholder
+    network_mode: service:placeholder
+    depends_on: [placeholder]
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        for url in http://127.0.0.1:9090/health http://[::1]:9090/health; do
+          for _ in $$(seq 30); do wget -q -O /dev/null "$$url" && break; sleep 0.2; done
+          wget -q -O /dev/null "$$url" || { echo "GET $$url failed" >&2; exit 1; }
+          echo "ok $$url"
+        done
