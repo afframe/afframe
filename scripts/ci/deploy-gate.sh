@@ -30,7 +30,7 @@ for sha in "$@"; do
 done
 
 if [[ -n "$reason" ]]; then
-  echo "Deploy skipped on purpose (${reason}). The next merge without the switch deploys everything." >&2
+  echo "Deploy skipped on purpose (${reason}). The next deploy that runs includes its changes." >&2
   echo "deploy=false"
 else
   echo "deploy=true"

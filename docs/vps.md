@@ -33,7 +33,7 @@ Postgres data lives in the Docker volume `afframe-postgres-data`, pgBackRest's w
 
 ## Deploy
 
-Every push to `main` runs `.github/workflows/deploy.yml`: the no-deploy gate, `deploy-services.sh` (services whose `apps/<name>/` or manifest changed; everything on a manual run), a build to `ghcr.io/afframe/afframe/<service>:sha-<sha>` with a provenance attestation, then `afframe-deploy` over Tailscale SSH. Docs-only merges build and deploy nothing.
+Every push to `main` runs `.github/workflows/deploy.yml`: the no-deploy gate, `deploy-services.sh` (services whose `apps/<name>/` or manifest changed since the last successful deployment to `production`, so a skipped, cancelled or failed deploy is carried into the next one; everything on a manual run or before the first success), a build to `ghcr.io/afframe/afframe/<service>:sha-<sha>` with a provenance attestation, then `afframe-deploy` over Tailscale SSH. Docs-only merges build and deploy nothing.
 
 GitHub configuration: three secrets of the environment `production` (branch `main` only). They are needed before the runner is on the tailnet, so they cannot come from Vault; as secrets they stay out of the public repo and are masked in the public Actions logs.
 
@@ -42,7 +42,7 @@ GitHub configuration: three secrets of the environment `production` (branch `mai
 | `TS_OAUTH_CLIENT_ID`, `TS_AUDIENCE` | Tailscale federated identity client for `repo:afframe/afframe:environment:production` |
 | `DEPLOY_HOST` | tailnet name of the production host |
 
-Set them only once the host is ready: until then a merge that changes an app or `deploy/` fails at the deploy job (build and push still run).
+Set them only once the host is ready: until then a merge that changes an app or `deploy/` fails at the deploy job (build and push still run); the first successful deploy then deploys everything.
 
 The GHCR packages `afframe/<service>` stay private. The deploy job pipes its own short-lived `GITHUB_TOKEN` (`packages: read`) to `afframe-deploy` on stdin, which logs in only for the pulls, in a throwaway Docker config; nothing is stored on the host. The current and previous image of each service stay on the host, so a rollback needs no registry access.
 

@@ -1,7 +1,7 @@
 name: Deploy
 
-# Every push to main: build the changed services to GHCR and deploy them to afframe-vps
-# (docs/vps.md). Target: about a minute from merge to live, no long checks in the way.
+# Every push to main: build the services changed since the last successful deployment to GHCR and
+# deploy them to afframe-vps (docs/vps.md). Target: about a minute from merge to live, no long checks in the way.
 # The runner joins the tailnet with Tailscale workload identity (OIDC) and reaches the host over
 # Tailscale SSH; the host reads runtime secrets from Vault. The three values needed before the
 # tailnet (and so Vault) is reachable are secrets of the `production` environment, so they never
@@ -25,6 +25,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      deployments: read
     outputs:
       deploy: ${{ steps.gate.outputs.deploy }}
       services: ${{ steps.changes.outputs.services }}
@@ -49,8 +50,13 @@ jobs:
       - name: Changed services
         id: changes
         env:
-          BEFORE: ${{ github.event.before }}
-        run: bash scripts/ci/deploy-services.sh "$BEFORE" "$GITHUB_SHA" | tee -a "$GITHUB_OUTPUT"
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -o pipefail
+          args=("$GITHUB_SHA")
+          if [[ "$EVENT" == workflow_dispatch ]]; then args+=(all); fi
+          bash scripts/ci/deploy-services.sh "${args[@]}" | tee -a "$GITHUB_OUTPUT"
 
   build:
     needs: plan
