@@ -207,8 +207,8 @@ YAML
 # retire_old: stops the old colours of every switched service together, once Traefik follows.
 retire_old() {
   local old
-  ((${#retired[@]})) || return 0
   sleep 2 # Traefik's file watcher picks the change up within about a second
+  ((${#retired[@]})) || return 0
   # Graceful stop lets in-flight requests finish. Traffic and state already point at the new
   # colours, so a leftover old container is only reported; the next deploy replaces it.
   docker stop -t 30 "${retired[@]}" > /dev/null 2>&1 || true

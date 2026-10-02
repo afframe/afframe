@@ -64,6 +64,7 @@ exit 0
 FAKEGIT
 cat > "$FAKE/bin/sleep" <<'FAKESLEEP'
 #!/usr/bin/env bash
+echo "sleep $*" >> "$FAKE/calls"
 FAKESLEEP
 chmod +x "$FAKE/bin/"*
 echo "$sha" > "$FAKE/known"
@@ -102,6 +103,7 @@ check "no container started for it" fails called "run -d"
 
 check "first deploy" run deploy "$sha" "placeholder=$v1"
 check "infrastructure brought up" called "compose -p afframe"
+check "waits for Traefik to pick up the first route" called "sleep 2"
 check "state is blue v1" test "$(state placeholder colour) $(state placeholder current)" == "blue $v1"
 check "route points at blue" grep -q "url: http://afframe-placeholder-blue:8080" <<< "$(route placeholder)"
 check "no migration without MIGRATE" fails called "run --rm --network afframe-db"
