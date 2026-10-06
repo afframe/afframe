@@ -153,10 +153,15 @@ prepare() {
 live_colour() {
   local service="$1" colour="" running
   local route="$AFFRAME_HOME/traefik/dynamic/$service.yml"
-  if [[ -f "$route" ]]; then
-    colour="$(sed -n "s/^ *- url: http:\/\/$PROJECT-$service-\(blue\|green\):.*/\1/p" "$route" | head -n 1)"
+  # The switch writes the route before the state: only an absent route falls back to the state.
+  if [[ -e "$route" || -L "$route" ]]; then
+    colour="$(sed -n "s/^ *- url: http:\/\/$PROJECT-$service-\(blue\|green\):.*/\1/p" "$route" 2> /dev/null)" \
+      || die "$service: cannot read traefik/dynamic/$service.yml"
+    colour="${colour%%$'\n'*}"
+    [[ -n "$colour" ]] || die "$service: traefik/dynamic/$service.yml names no colour"
+  else
+    read_vars "$AFFRAME_HOME/state/$service" colour
   fi
-  [[ -n "$colour" ]] || read_vars "$AFFRAME_HOME/state/$service" colour
   if [[ -z "$colour" ]]; then
     running="$(docker ps --format '{{.Names}}' | sed -n "s/^$PROJECT-$service-\(blue\|green\)$/\1/p" | sort -u)"
     # A lost route and state must never make the live colour look idle.

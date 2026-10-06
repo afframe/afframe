@@ -457,6 +457,23 @@ check "neither colour removed" test "$(grep -c '^afframe-fixture-' "$FAKE/contai
 check "nothing switched" test ! -f "$AFFRAME_HOME/traefik/dynamic/fixture.yml"
 printf 'current=%s\ncolour=%s\nprevious=\n' "$(img fixture 6)" "$live" > "$AFFRAME_HOME/state/fixture"
 check "deploy once the state is back" dep fixture=7
+route="$AFFRAME_HOME/traefik/dynamic/fixture.yml"
+cp "$route" "$work/fixture.yml"
+if [[ $EUID -ne 0 ]]; then # root reads a file without read permission
+  chmod 000 "$route"
+  fails_naming "an unreadable route fails the deploy" "cannot read traefik/dynamic/fixture.yml" dep fixture=7b
+  check "no container created for it" fails called "create --name"
+  chmod 644 "$route"
+fi
+echo "http: {}" > "$route"
+fails_naming "a route that names no colour fails the deploy" "traefik/dynamic/fixture.yml names no colour" dep fixture=7b
+check "no container created for it" fails called "create --name"
+cp "$work/fixture.yml" "$route"
+live="$(state fixture colour)"
+rm "$route"
+check "deploy with the route lost" dep fixture=7b
+check "live colour taken from the state, not recreated" fails called "create --name afframe-fixture-$live"
+check "switched to the other colour" grep -q "afframe-fixture-$(other "$live"):8080" <<< "$(route fixture)"
 
 echo flaky > "$FAKE/health"
 : > "$FAKE/probes"
