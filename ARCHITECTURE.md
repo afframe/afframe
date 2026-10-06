@@ -167,7 +167,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
    until [ "$(docker exec afframe-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select pg_is_in_recovery()"' 2> /dev/null)" = f ]; do sleep 5; done
    ```
 
-6. Turn on the deploys and run the Deploy workflow. The first release takes over the restored Postgres, and `stanza-create` accepts it.
+7. Take a full backup as in step 7 of the first procedure. Start the timers with the `systemctl start` command of step 8 of the first procedure.
 7. Take a full backup as in step 7 of the first procedure. Start the timers with the `systemctl` command of step 8.
 8. Remove the working copy from step 2:
 
