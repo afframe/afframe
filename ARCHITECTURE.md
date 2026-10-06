@@ -93,7 +93,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
    docker exec afframe-postgres pgbackrest info
    ```
 
-3. Stop Postgres. The services get database errors until step 5 ends. A shorter timeout can kill Postgres. A killed Postgres leaves `postmaster.pid`, and pgBackRest refuses to restore. Then start Postgres, wait for it, and stop it again with the timeout.
+3. Stop Postgres. The services get database errors until step 5 ends. A shorter timeout can kill Postgres. A killed Postgres leaves `postmaster.pid`, and pgBackRest refuses to restore. If this occurs, start Postgres, wait for it, and stop it again with the timeout.
 
    ```sh
    docker stop --time 120 afframe-postgres
@@ -144,7 +144,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 
 The first release starts Postgres and creates the stanza. `stanza-create` needs a primary, and it must find the restored database. Thus the restore runs before the first deploy, and the recovery ends before it.
 
-1. Make sure that Postgres on the old host is stopped. Do the host setup in `$INTERNAL/afframe-deploy.md`. Do not run a deploy. Turn off the deploys as in step 1 of the first procedure.
+1. Turn off the deploys as in step 1 of the first procedure. Make sure that Postgres on the old host is stopped. Then do the host setup in `$INTERNAL/afframe-deploy.md`. Do not run a deploy. If the host setup started the timers, stop them as in step 1 of the first procedure.
 2. Copy the `deploy/` folder of `main` to the host. On a workstation, in a checkout of `main`:
 
    ```sh
