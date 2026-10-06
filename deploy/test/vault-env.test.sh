@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fake `curl` on PATH: no Vault needed.
 set -uo pipefail
+command -v jq > /dev/null || { echo "skip: needs jq"; exit 77; }
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d)"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
+command -v jq > /dev/null || { echo "skip: needs jq"; exit 77; }
 
 script="$(cd "$(dirname "$0")" && pwd)/service-tests.sh"
 tmp="$(mktemp -d)"

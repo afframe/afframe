@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fakes `docker`, `sleep` and `id` on PATH: no daemon needed.
 set -uo pipefail
+for cmd in flock cmp sha256sum timeout; do command -v "$cmd" > /dev/null || { echo "skip: needs $cmd"; exit 77; }; done
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d)"

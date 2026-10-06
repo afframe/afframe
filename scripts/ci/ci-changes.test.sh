@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs on a scratch git repository.
 set -uo pipefail
+command -v jq > /dev/null || { echo "skip: needs jq"; exit 77; }
 
 script="$(cd "$(dirname "$0")" && pwd)/ci-changes.sh"
 repo="$(mktemp -d)"
