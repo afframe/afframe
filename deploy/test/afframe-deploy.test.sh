@@ -474,7 +474,8 @@ if [[ $EUID -ne 0 ]]; then # root reads a file without read permission
   chmod 644 "$route"
 fi
 echo "http: {}" > "$route"
-fails_naming "a route that names no colour fails the deploy" "traefik/dynamic/fixture.yml names no colour" dep fixture=7b
+fails_naming "a route that names no colour fails the deploy" "traefik/dynamic/fixture.yml names no colour" \
+  dep fixture=7b
 check "no container created for it" fails called "create --name"
 cp "$work/fixture.yml" "$route"
 live="$(state fixture colour)"

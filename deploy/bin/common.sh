@@ -22,7 +22,8 @@ refuse_root() {
 # docker_config: a CLI config of its own, so no Docker warning names a path in the home folder.
 docker_config() {
   export DOCKER_CONFIG="$AFFRAME_HOME/docker"
-  { mkdir -p "$DOCKER_CONFIG" && chmod 700 "$DOCKER_CONFIG"; } 2> /dev/null || die "cannot create docker in AFFRAME_HOME"
+  { mkdir -p "$DOCKER_CONFIG" && chmod 700 "$DOCKER_CONFIG"; } 2> /dev/null \
+    || die "cannot create docker in AFFRAME_HOME"
 }
 
 # env_value <KEY>: empty when absent.
