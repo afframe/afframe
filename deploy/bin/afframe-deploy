@@ -383,9 +383,10 @@ route_back() {
   done
 }
 
+# switch_all <held image or empty> <service>=<image>...
 switch_all() {
-  local spec i=0 held=""
-  [[ "${1:-}" != held=* ]] || { held="${1#held=}"; shift; }
+  local held="$1" spec i=0
+  shift
   undo_dir="$(mktemp -d)"
   # Every new colour is healthy and about to take traffic: none is removed on exit any more, or a
   # failure between two route writes would take down a service already switched.
@@ -462,7 +463,7 @@ main() {
       prepare
       start_all yes "${specs[@]}"
       retire_removed
-      switch_all "${specs[@]}"
+      switch_all "" "${specs[@]}"
       printf 'sha=%s\nrun=%s\n' "$sha" "$run" | write_file "$AFFRAME_HOME/state/.deployed"
       [[ ! -L "$AFFRAME_HOME/current" ]] || previous_release="$(readlink "$AFFRAME_HOME/current")"
       { ln -sfn "$REPO" "$AFFRAME_HOME/current.tmp" && mv -T "$AFFRAME_HOME/current.tmp" "$AFFRAME_HOME/current"; } \
@@ -481,7 +482,7 @@ main() {
       [[ -n "$previous" ]] || die "$service: no previous image to roll back to"
       docker image inspect "$previous" > /dev/null 2>&1 || die "$service: previous image $previous is gone"
       start_all no "$service=$previous"
-      switch_all "held=$current" "$service=$previous"
+      switch_all "$current" "$service=$previous"
       log "$service: rolled back; $current is held until a different image is deployed"
       ;;
     *)
