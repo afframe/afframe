@@ -396,6 +396,13 @@ check "on the new image, hold cleared" \
 printf 'current=a\ncolour=blue\nprevious=sha256:gone\n' > "$AFFRAME_HOME/state/ghost"
 check "rollback with its previous image gone fails" fails run rollback ghost
 rm -f "$AFFRAME_HOME/state/ghost"
+printf 'HOST=held.test\nPORT=8080\nMEMORY=64m\nMIGRATE=\n' > "$release/deploy/services/held.conf"
+check "deploy of a service named held" dep held=1
+check "it switches" test "$(state held current)" == "$(img held 1)"
+check "its route points at it" grep -q "afframe-held-$(state held colour):8080" <<< "$(route held)"
+rm "$release/deploy/services/held.conf"
+check "deploy that retires it" dep
+check "its state removed" test ! -e "$AFFRAME_HOME/state/held"
 
 echo A=2 > "$FAKE/infra.env"
 check "deploy after an infra secret change" dep
