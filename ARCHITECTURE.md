@@ -206,7 +206,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 ## 10. Project Identification
 
 - Repository: https://github.com/afframe/afframe
-- License: All Rights Reserved, in `LICENSES/LicenseRef-AllRightsReserved.txt`.
+- License: All Rights Reserved, in `LICENSE`.
 
 ## 11. Glossary
 
