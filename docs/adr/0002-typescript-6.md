@@ -14,9 +14,9 @@
 
 - The project uses TypeScript 6.0. `docs/templates/app/README.md` holds the exact pin.
 - Dependabot ignores major and minor updates of `typescript`. typescript-eslint rejects 6.1.
-- The next TypeScript update waits for typescript-eslint support.
+- A move past TypeScript 6.0 waits for typescript-eslint support.
 
 ## Consequences
 
 - Type checks and lint use one TypeScript version.
-- The next TypeScript update is a separate change. It also removes the Dependabot ignore.
+- A move past TypeScript 6.0 is a separate change. It also updates the Dependabot ignore.

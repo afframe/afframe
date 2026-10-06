@@ -21,8 +21,8 @@
 ## Consequences
 
 - The images travel only from the deploy job to the deploy host. No other host stores them.
-- The deploy adds no infrastructure to run, patch or protect.
-- The deploy host builds nothing. It runs the images that the service tests passed on.
+- The project runs, patches and protects no image store.
+- The deploy host builds no service image. It runs the images that the service tests passed on.
 - Each deploy transfers the full image of every deployable service over the network.
 - No copy of old images exists outside the deploy host.
 - The image transfer lives in the deploy job and in `deploy/bin/afframe-deploy`. A change of the transfer reworks both.
