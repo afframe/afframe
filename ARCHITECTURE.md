@@ -21,7 +21,8 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 
 ## 4. Data Stores
 
-- Postgres runs on the deploy host from `deploy/postgres/Dockerfile`, on an internal network only.
+- Postgres runs on the deploy host from `deploy/postgres/Dockerfile`. The services reach it on the internal network `db`.
+- Postgres also joins the network `egress` to reach the backup repository. It publishes no ports.
 - pgBackRest archives WAL and takes scheduled backups to the backup repository that Vault configures.
 - Each backup writes a sentinel row to `ops.heartbeat`. A failed sentinel write only warns.
 - The restore drill restores the latest backup with WAL into a throwaway container and never touches the live database.
