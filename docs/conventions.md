@@ -41,5 +41,5 @@
 
 - `AGENTS.md` section Rules tells when to write an ADR.
 - The status of an ADR is `Accepted` or `Superseded by NNNN`.
-- A proposal is an issue, not a document.
+- A proposal is an issue, as `AGENTS.md` section Rules states for a feature idea.
 - Each new document gets a row in the index table of `README.md`. The `docs/adr/` row covers each ADR.

@@ -14,7 +14,7 @@
 ## Decision
 
 - Postgres runs from `deploy/postgres/Dockerfile`. The image contains pgBackRest.
-- Postgres archives each WAL segment to the pgBackRest repository through `archive_command` in `deploy/compose.prod.yml`.
+- Postgres archives each WAL segment to the backup repository through `archive_command` in `deploy/compose.prod.yml`.
 - Vault configures the backup repository.
 - `afframe-backup` takes full and differential backups. A systemd timer in `deploy/host/systemd/` starts it.
 - `afframe-restore-drill` restores the latest backup with WAL into a throwaway container. Its own systemd timer starts it.
