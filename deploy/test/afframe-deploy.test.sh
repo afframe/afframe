@@ -28,6 +28,7 @@ deploy="$release/deploy/bin/afframe-deploy"
 cat > "$FAKE/bin/docker" <<'FAKEDOCKER'
 #!/usr/bin/env bash
 echo "docker $*" >> "$FAKE/calls"
+echo "${DOCKER_CONFIG:-unset}" >> "$FAKE/configs"
 [[ "$1" != compose ]] || echo "traefik-hash ${AFFRAME_TRAEFIK_HASH:-}" >> "$FAKE/calls"
 # Output that must stay on the host: <kind>-secret.
 [[ "$1" != compose ]] || echo "compose-secret"
@@ -148,6 +149,7 @@ dep_env() {
     > "$FAKE/out" 2>&1
 }
 run() { : > "$FAKE/calls"; PATH="$FAKE/bin:$PATH" "$deploy" "$@" < /dev/null > /dev/null 2>&1; }
+host_job() { PATH="$FAKE/bin:$PATH" "$release/deploy/bin/$1" "${@:2}" < /dev/null > /dev/null 2>&1; }
 state() { sed -n "s/^$2=//p" "$AFFRAME_HOME/state/$1" 2> /dev/null; }
 route() { cat "$AFFRAME_HOME/traefik/dynamic/$1.yml" 2> /dev/null; }
 router() { route "$1" | awk -v r="    $2:" '$0 == r {f = 1; next} f && /^    [^ ]/ {f = 0} f && /^  [^ ]/ {f = 0} f'; }
@@ -270,6 +272,12 @@ check "route points at blue" grep -q "url: http://afframe-fixture-blue:8080" <<<
 check "no migration without MIGRATE" fails called "run --rm --network afframe-db"
 check "current points at the release" test "$(readlink "$AFFRAME_HOME/current")" == "$release"
 check "deployed run recorded" test "$(sed -n 's/^run=//p' "$AFFRAME_HOME/state/.deployed")" == "$n"
+check "every docker call uses the Docker config in AFFRAME_HOME" \
+  test "$(sort -u "$FAKE/configs")" == "$AFFRAME_HOME/docker"
+check "Docker config readable by the deploy user only" test "$(stat -c %a "$AFFRAME_HOME/docker")" == 700
+: > "$FAKE/configs"
+check "afframe-backup runs" host_job afframe-backup full
+check "with the Docker config in AFFRAME_HOME" test "$(sort -u "$FAKE/configs")" == "$AFFRAME_HOME/docker"
 
 rm "$AFFRAME_HOME/deploy.lock"
 mkdir "$AFFRAME_HOME/deploy.lock"
