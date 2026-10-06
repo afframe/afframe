@@ -72,7 +72,16 @@ check_gitleaks() {
   fi
 }
 
-checks=(actionlint zizmor compose shellcheck gitleaks)
+# Markdown has no hard wraps and lockfiles are generated. A pin line (`@` and a SHA) may be longer.
+check_line_length() {
+  git ls-files -z '*.sh' 'deploy/bin/*' '*.yml' '*.yaml' '*Dockerfile*' ':!:*-lock.yaml' \
+    | xargs -0 awk '/@(sha256:)?[0-9a-f]{40}/ {next}
+      {max = /^[[:space:]]*#/ ? 100 : 120}
+      length > max {printf "%s:%d: %d columns, at most %d\n", FILENAME, FNR, length, max; bad = 1}
+      END {exit bad}'
+}
+
+checks=(actionlint zizmor compose shellcheck gitleaks line_length)
 
 logs="$(mktemp -d)"
 trap 'rm -rf "$logs"' EXIT
