@@ -13,7 +13,6 @@ sha="$(printf 'b%.0s' {1..40})"
 # img <service> <version>: the image ID the host's store gives that build.
 img() { printf 'sha256:%s' "$(printf '%s-%s' "$1" "$2" | sha256sum | cut -c1-64)"; }
 
-# vault-env is replaced by a copy of $FAKE/infra.env.
 release="$AFFRAME_HOME/releases/$sha"
 mkdir -p "$FAKE/bin"
 (cd "$root" && tar -cf - deploy) | sh "$root/deploy/bin/afframe-receive" "$sha" > /dev/null
@@ -163,6 +162,14 @@ check() {
   if "$@"; then echo "ok: $name"; else echo "FAIL: $name"; failures=$((failures + 1)); fi
 }
 fails() { ! "$@"; }
+# fails_naming <check name> <text> <command>...: Actions logs are public, so paths are relative.
+fails_naming() {
+  local name="$1" text="$2"
+  shift 2
+  check "$name" fails "$@"
+  check "the job log names $text" printed "$text"
+  check "and never the absolute host path" fails printed "$AFFRAME_HOME"
+}
 traefik_hash() { sed -n 's/^traefik-hash //p' "$FAKE/calls" | head -n 1; }
 line_of() { grep -n -- "$1" "$FAKE/calls" | head -n 1 | cut -d: -f1; }
 before() { [[ "$(line_of "$1")" -lt "$(line_of "$2")" ]]; }
@@ -186,9 +193,7 @@ check "receive into an AFFRAME_HOME that is a file fails" fails receive_to "$wor
 check "and never prints the absolute host path" fails printed "$work"
 sha3="$(printf 'd%.0s' {1..40})"
 touch "$AFFRAME_HOME/releases/$sha3" # a file where the release folder goes
-check "receive that cannot move the release in place fails" fails receive_to "$AFFRAME_HOME" "$sha3"
-check "the job log names the release" printed "releases/$sha3"
-check "and never the absolute host path" fails printed "$AFFRAME_HOME"
+fails_naming "receive that cannot move the release in place fails" "releases/$sha3" receive_to "$AFFRAME_HOME" "$sha3"
 rm -rf "$AFFRAME_HOME/releases/$sha3" "$AFFRAME_HOME/releases/$sha3.tmp"
 
 check "postgres data volume name is literal" grep -qx '    name: afframe-postgres-data' "$root/deploy/compose.prod.yml"
@@ -266,36 +271,25 @@ check "no migration without MIGRATE" fails called "run --rm --network afframe-db
 check "current points at the release" test "$(readlink "$AFFRAME_HOME/current")" == "$release"
 check "deployed run recorded" test "$(sed -n 's/^run=//p' "$AFFRAME_HOME/state/.deployed")" == "$n"
 
-# Each failure names its file relative to AFFRAME_HOME: Actions logs are public.
 rm "$AFFRAME_HOME/deploy.lock"
 mkdir "$AFFRAME_HOME/deploy.lock"
-check "a lock that cannot be opened fails the deploy" fails dep
-check "the job log names the lock" printed "deploy.lock"
-check "and never the absolute host path" fails printed "$AFFRAME_HOME"
+fails_naming "a lock that cannot be opened fails the deploy" "deploy.lock" dep
 rmdir "$AFFRAME_HOME/deploy.lock"
 mv "$AFFRAME_HOME/tls" "$work/tls"
 touch "$AFFRAME_HOME/tls"
-check "a host folder that cannot be created fails the deploy" fails dep
-check "the job log says so" printed "cannot create"
-check "and never the absolute host path" fails printed "$AFFRAME_HOME"
+fails_naming "a host folder that cannot be created fails the deploy" "cannot create" dep
 rm "$AFFRAME_HOME/tls"
 mv "$work/tls" "$AFFRAME_HOME/tls"
 rm "$AFFRAME_HOME/log/vault-env.log"
 mkdir "$AFFRAME_HOME/log/vault-env.log"
-check "a host log that cannot be written fails the deploy" fails dep
-check "the job log names the host log" printed "log/vault-env.log"
-check "and never the absolute host path" fails printed "$AFFRAME_HOME"
+fails_naming "a host log that cannot be written fails the deploy" "log/vault-env.log" dep
 rmdir "$AFFRAME_HOME/log/vault-env.log"
 if [[ $EUID -ne 0 ]]; then # root reads a file without read permission
   chmod 000 "$AFFRAME_HOME/state/.infra"
-  check "an unreadable state file fails the deploy" fails dep
-  check "the job log names it" printed "cannot read state/.infra"
-  check "and never the absolute host path" fails printed "$AFFRAME_HOME"
+  fails_naming "an unreadable state file fails the deploy" "cannot read state/.infra" dep
   chmod 644 "$AFFRAME_HOME/state/.infra"
   chmod 000 "$AFFRAME_HOME/state/.deployed"
-  check "an unreadable deployed run fails the deploy" fails dep
-  check "the job log names it" printed "cannot read state/.deployed"
-  check "and never the absolute host path" fails printed "$AFFRAME_HOME"
+  fails_naming "an unreadable deployed run fails the deploy" "cannot read state/.deployed" dep
   chmod 644 "$AFFRAME_HOME/state/.deployed"
 fi
 
@@ -314,12 +308,9 @@ check "old blue stopped gracefully" called "stop -t 30 afframe-fixture-blue"
 check "old blue removed after the stop" before "stop -t 30 afframe-fixture-blue" "rm -f afframe-fixture-blue"
 check "old blue gone" fails exists afframe-fixture-blue
 
-deployed_run="$n"
-: > "$FAKE/calls"
-check "an older run is refused" fails env PATH="$FAKE/bin:$PATH" "$deploy" deploy "$sha" "$((n - 1))" < /dev/null
+check "an older run is refused" fails run deploy "$sha" "$((n - 1))"
 check "nothing loaded for the older run" fails called "docker load"
-check "the same run again deploys (re-run)" \
-  env PATH="$FAKE/bin:$PATH" "$deploy" deploy "$sha" "$deployed_run" < /dev/null > /dev/null 2>&1
+check "the same run again deploys (re-run)" run deploy "$sha" "$n"
 
 check "deploy with migration" dep migrated=1
 check "migration ran in the new image" \
@@ -503,9 +494,8 @@ check "and never the absolute host path" fails printed "$AFFRAME_HOME"
 rmdir "$AFFRAME_HOME/traefik/dynamic/migrated.yml.tmp"
 
 echo fail > "$FAKE/create"
-check "a container that cannot be created fails the deploy" fails dep fixture=12b
-check "docker output kept out of the job log" printed "log/afframe-fixture-[a-z]*-create.log"
-check "and never the absolute host path" fails printed "$AFFRAME_HOME"
+fails_naming "a container that cannot be created fails the deploy" "log/afframe-fixture-[a-z]*-create.log" \
+  dep fixture=12b
 echo ok > "$FAKE/create"
 
 # legacy has a route for the same Host as fixture: it would shadow the new route.
@@ -519,9 +509,7 @@ check "the removed service is still there" \
 echo ok > "$FAKE/health"
 mv "$AFFRAME_HOME/traefik/dynamic/legacy.yml" "$work/legacy.yml"
 mkdir "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
-check "a route that cannot be removed fails the deploy" fails dep fixture=13
-check "the job log names the route" printed "cannot remove traefik/dynamic/legacy.yml"
-check "and never the absolute host path" fails printed "$AFFRAME_HOME"
+fails_naming "a route that cannot be removed fails the deploy" "cannot remove traefik/dynamic/legacy.yml" dep fixture=13
 rmdir "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
 mv "$work/legacy.yml" "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
 check "deploy with a service removed from deploy/services" dep fixture=13
