@@ -450,6 +450,7 @@ main() {
       local services=("${@:4}")
       validate_services "${services[@]}"
       lock
+      docker_config
       # A re-run of an older run never replaces a newer deploy. The same run again may.
       local deployed="$AFFRAME_HOME/state/.deployed" deployed_run="" previous_release="" out specs=()
       [[ ! -f "$deployed" ]] || deployed_run="$(sed -n 's/^run=//p' "$deployed" 2> /dev/null)" \
@@ -477,6 +478,7 @@ main() {
       local service="${2:-}" current="" previous=""
       valid_service "$service" || die "usage: rollback <service>"
       lock
+      docker_config
       trap cleanup EXIT
       read_vars "$AFFRAME_HOME/state/$service" current previous
       [[ -n "$previous" ]] || die "$service: no previous image to roll back to"
