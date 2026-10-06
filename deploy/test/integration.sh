@@ -109,6 +109,16 @@ restore() {
     -v "$PGBACKREST_VOLUME:/var/lib/pgbackrest" "$POSTGRES:local" \
     sh -c 'mkdir -m 700 -p "$PGBACKREST_PG1_PATH" && exec pgbackrest restore "$@"' sh "$@"
 }
+# wait_paused <seconds>: step 5 of ARCHITECTURE.md section 6.3, until Postgres pauses at the target.
+wait_paused() {
+  local i
+  for ((i = 0; i < $1; i++)); do
+    [[ "$(psql_prod 'select pg_get_wal_replay_pause_state()' 2> /dev/null)" != paused ]] || return 0
+    sleep 1
+  done
+  docker logs --tail 20 "$POSTGRES" >&2
+  return 1
+}
 releases() { find "$AFFRAME_HOME/releases" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | tr '\n' ' '; }
 
 # public_response <path>: with SNI HOST.
@@ -224,10 +234,15 @@ sleep 1
 psql_prod "insert into drill values (45)" > /dev/null
 check "WAL after the target archived" docker exec "$POSTGRES" pgbackrest check
 check "postgres stopped" docker stop --time 120 "$POSTGRES"
-check "restored to the target" restore --delta --type=time --target-action=promote "--target=$target"
+check "restored to the target" restore --delta --type=time --target-action=pause "--target=$target"
 check "postgres started" docker start "$POSTGRES"
+check "paused at the target" wait_paused 120
+check "rows up to the target only, while paused" \
+  test "$(psql_prod "select string_agg(x::text, ' ' order by x) from drill")" == "42 43 44"
+check "read-only while paused" fails psql_prod "insert into drill values (46)"
+check "resumed" psql_prod "select pg_wal_replay_resume()"
 check "recovery ended" wait_recovered "$POSTGRES" 120
-check "rows up to the target only" \
+check "rows up to the target only, after the recovery" \
   test "$(psql_prod "select string_agg(x::text, ' ' order by x) from drill")" == "42 43 44"
 check "stanza-create accepts the restored database" docker exec "$POSTGRES" pgbackrest stanza-create
 check "full backup after the restore" "$current/afframe-backup" full
