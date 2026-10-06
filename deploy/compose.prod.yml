@@ -31,6 +31,8 @@ services:
     restart: unless-stopped
     mem_limit: 2g
     shm_size: 256m
+    # ARCHITECTURE.md 6.3 step 3 and deploy/test/integration.sh stop Postgres with the same timeout.
+    stop_grace_period: 120s
     # Rendered by deploy/bin/vault-env.
     env_file:
       - path: ${AFFRAME_HOME:?}/env/infra.env
