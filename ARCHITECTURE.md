@@ -96,7 +96,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 | Recovery point target | `RPO_HOURS` in `deploy/bin/common.sh` |
 | Health thresholds | `deploy/bin/afframe-health` |
 | Health passes and timeouts of a deploy | `deploy/bin/afframe-deploy` |
-| Runner label | `runs-on` in each workflow, and `scripts/ci/actionlint.yaml` |
+| Runner label | `runs-on` in each workflow, and the actionlint `-ignore` in `scripts/ci/repo-lint.sh` |
 | Lint tool versions | `scripts/ci/toolbox/Dockerfile` |
 | CVE scanner version | `scripts/ci/trivy/Dockerfile` |
 | CodeGraph and pnpm versions | `package.json` |
