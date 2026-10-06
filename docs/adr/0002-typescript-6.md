@@ -2,7 +2,6 @@
 
 | Property | Value |
 |---|---|
-| Status | Accepted |
 | Date | 2026-10-06 |
 
 ## Context

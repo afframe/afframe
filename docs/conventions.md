@@ -32,14 +32,12 @@
 
 | Fact | File |
 |---|---|
-| Rules for agents and contributors | `AGENTS.md` |
-| The system as it is now | `ARCHITECTURE.md` |
-| Names and the source of each value | `docs/conventions.md` |
-| A decision and its reasons | `docs/adr/` |
 | Private facts | `$INTERNAL`, as "All files" in `AGENTS.md` states |
 | Facts about one app | `apps/<name>/README.md`, when the file exists |
 
+The index table of `README.md` names the file for the other facts.
+
 - `AGENTS.md` section Rules tells when to write an ADR.
-- The status of an ADR is `Accepted` or `Superseded by NNNN`.
+- An ADR states the current choice and its reasons. It names no former or rejected option. A changed choice rewrites or deletes its ADR.
 - A proposal is an issue, as `AGENTS.md` section Rules states for a feature idea.
 - Each new document gets a row in the index table of `README.md`. The `docs/adr/` row covers each ADR.
