@@ -15,17 +15,17 @@
 
 - Postgres runs from `deploy/postgres/Dockerfile`. The image contains pgBackRest.
 - Postgres archives each WAL segment to the backup repository through `archive_command` in `deploy/compose.prod.yml`.
-- Vault configures the backup repository.
+- The backup repository is remote object storage that Vault configures. Postgres reaches it over an egress network in `deploy/compose.prod.yml`.
 - `afframe-backup` takes full and differential backups. A systemd timer in `deploy/host/systemd/` starts it.
 - `afframe-restore-drill` restores the latest backup with WAL into a throwaway container. Its own systemd timer starts it.
 - The drill never touches the live database.
-- The drill fails when the newest restored data is older than the recovery point target in `deploy/bin/common.sh`.
+- The drill fails when the restored `ops.heartbeat` sentinel is older than the recovery point target in `deploy/bin/common.sh`.
 - `ARCHITECTURE.md` section 4 describes the data stores. Section 6.3 gives the steps of a restore.
 
 ## Consequences
 
-- Point-in-time recovery restores the database to any second inside the retention window.
-- `archive_timeout` in `deploy/compose.prod.yml` sets the longest time between two archived WAL segments.
+- Point-in-time recovery restores the database to a time between the end of the oldest backup and the newest archived WAL.
+- While archiving works, `archive_timeout` in `deploy/compose.prod.yml` sets the longest time before a commit reaches the backup repository.
 - The restore drill proves on a schedule that the backups restore and contain recent data.
 - The heartbeat monitor reports each failed backup and each failed drill.
 - `deploy/compose.prod.yml` sets the retention of full backups. Older backups and their WAL expire.

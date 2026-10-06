@@ -60,7 +60,7 @@ updates:
     commit-message:
       prefix: chore
       include: scope
-    # TypeScript stays on 6.0 until typescript-eslint supports 7: docs/adr/0002-typescript-6.md.
+    # typescript stays inside the typescript-eslint peer range: docs/adr/0002-typescript-6.md.
     ignore:
       - dependency-name: typescript
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
