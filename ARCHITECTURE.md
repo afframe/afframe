@@ -148,7 +148,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 2. Copy the `deploy/` folder of `main` to the host. On a workstation, in a checkout of `main`:
 
    ```sh
-   git archive HEAD deploy | ssh <deploy host> 'mkdir -p afframe-restore && tar -x -C afframe-restore'
+   git archive HEAD deploy | ssh <user of the host jobs>@<deploy host> 'mkdir -p afframe-restore && tar -x -C afframe-restore'
    ```
 
 3. On the host, render the credentials. Then build the Postgres image and create its container and volumes. Compose does not start Postgres.
