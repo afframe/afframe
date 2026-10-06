@@ -10,7 +10,7 @@ The sections from "All files" to "YAML and workflows" are the writing rules. The
 | `packages/<name>/` | Shared code that apps use. It deploys only inside an app image. The folder does not exist until the first package. |
 | `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `.dockerignore` | The pnpm workspace root, and the files that app image builds get |
 | `.github/workflows/` | `ci.yml` and `pr-title.yml` are the PR gates. `deploy.yml` deploys and rolls back. `security.yml` runs the scheduled image scan. |
-| `scripts/ci/` | Shell for CI, the deploy workflow and the local gate. A `*.test.sh` is next to each tested script. |
+| `scripts/ci/` | Shell for CI, the deploy workflow, the local gate and the rulesets. A `*.test.sh` is next to each tested script. |
 | `deploy/` | The deploy host stack: host commands in `deploy/bin/`, `deploy/compose.prod.yml`, Postgres, Traefik, systemd units and service manifests |
 | `deploy/test/` | Tests of `deploy/`. The deploy does not ship this folder. |
 | `compose.ci.yml` | The service tests that CI and the deploy run |
@@ -27,6 +27,7 @@ The sections from "All files" to "YAML and workflows" are the writing rules. The
 | Tests of one script | `bash <path>.test.sh` | Example: `bash deploy/test/afframe-deploy.test.sh` |
 | Deploy stack end to end | `bash deploy/test/integration.sh` | Takes minutes. See the warning below. |
 | Build images | `bash scripts/ci/build-images.sh <tag> <service>...` | Pushes nothing |
+| Compare the rulesets with GitHub, or apply them | `GH_REPO=afframe/afframe bash scripts/ci/rulesets.sh [apply]` | `apply` changes live settings |
 | Set up an agent session: Node deps and the CodeGraph index | `bash scripts/setup.sh` | Safe to run again |
 | CodeGraph index status | `pnpm exec codegraph status .` | |
 | Start or remove the dev Postgres of this workspace | `bash scripts/dev/stack.sh up` or `down` | |

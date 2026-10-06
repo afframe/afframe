@@ -165,7 +165,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 - `ci` builds and tests every app when `packages/` or a root workspace file changed.
 - `docs/adr/0001-registry-free-deploy.md` records why CI uses no registry.
 - `.github/workflows/security.yml` scans the pinned Traefik image and fresh builds of the Postgres image and each deployable service on a schedule.
-- `.github/rulesets/main.json` requires PRs, the checks `ci` and `pr-title`, squash merge, linear history and signed commits. `.github/rulesets/README.md` tells how to apply a file.
+- `.github/rulesets/main.json` requires PRs, the checks `ci` and `pr-title`, squash merge, linear history and signed commits. `scripts/ci/rulesets.sh` compares them with GitHub or applies them. A merge does not apply them. The squash commit title setting stays `PR_TITLE`, because the `pr-title` check validates the PR title.
 - `.github/rulesets/tags.json` protects `v*` tags from deletion and force-push, and requires linear history and signed commits.
 
 ### 6.6 Values and their source files
