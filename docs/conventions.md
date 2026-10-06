@@ -27,3 +27,19 @@
 - Some files cannot read a variable: Traefik static config, `on.push.branches`, `.github/CODEOWNERS` and `afframe-receive`, which runs before a release exists. Keep the value there once. The reader names that file in a 1-line comment, and a test proves the match when a second copy is in the repository.
 - `.github/workflows/deploy.yml` keeps host path literals. A 1-line comment points to `deploy/bin/common.sh`. Actions logs are public. Never echo an absolute host path.
 - Tests keep literal expected values. A test that reads a value from the code under test cannot find a change.
+
+## Documents
+
+| Fact | File |
+|---|---|
+| Rules for agents and contributors | `AGENTS.md` |
+| The system as it is now | `ARCHITECTURE.md` |
+| Names and the source of each value | `docs/conventions.md` |
+| A decision and its reasons | `docs/adr/` |
+| Private facts | `$INTERNAL`, as "All files" in `AGENTS.md` states |
+| Facts about one app | `apps/<name>/README.md`, when the file exists |
+
+- `AGENTS.md` section Rules tells when to write an ADR.
+- The status of an ADR is `Accepted` or `Superseded by NNNN`.
+- A proposal is an issue, not a document.
+- Each new document gets a row in the index table of `README.md`. The `docs/adr/` row covers each ADR.

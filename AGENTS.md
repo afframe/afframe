@@ -1,6 +1,6 @@
 # AGENTS.md
 
-The sections from "All files" to "YAML and workflows" are the writing rules. They apply to every file and to published text. `docs/conventions.md` sets the naming rules and the single source of each value: read it before you name a file or add a value. `ARCHITECTURE.md` describes the system and the deploy: read it before a change to `deploy/`, CI or a service.
+The sections from "All files" to "YAML and workflows" are the writing rules. They apply to every file and to published text. `docs/conventions.md` sets the naming rules, the single source of each value and the place of each document. Read it before you add a file or a value. `ARCHITECTURE.md` describes the system and the deploy: read it before a change to `deploy/`, CI or a service.
 
 ## Layout
 
@@ -126,6 +126,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 - The PR title is a Conventional Commit. `scripts/ci/pr-title.sh` checks it in a Claude Code hook and in the `pr-title` check. The squash merge uses it as the commit subject.
 - Fill in `.github/pull_request_template.md` for each PR.
 - Record a feature idea as an issue from `.github/ISSUE_TEMPLATE/feature.yml`.
+- Record a choice that a future contributor could reverse for a wrong reason as an ADR in `docs/adr/`. Use the next number and the shape of the newest ADR.
 - Never merge with `gh pr merge --admin`. Admins can bypass the rulesets, but agents must not.
 - `ci` and `pr-title` are the only merge gates. Merge when both pass.
 - AI reviews are advisory. Do not wait for them before a merge. The owner starts a Claude review with the `claude-review` label or a manual run of `claude-code-review.yml`.
