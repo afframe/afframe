@@ -1,0 +1,10 @@
+[Unit]
+Description=afframe restore-drill
+
+[Timer]
+OnCalendar=*-*-01 04:00:00 UTC
+Persistent=true
+Unit=afframe@restore-drill.service
+
+[Install]
+WantedBy=timers.target

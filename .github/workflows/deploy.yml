@@ -1,0 +1,116 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main] # The OIDC trust accepts only main: the job if and the merged-PR check repeat it.
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+    inputs:
+      rollback:
+        description: Roll this service back to its previous image instead of deploying (empty = deploy)
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  deploy:
+    if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    # Above build, transfer and the timeouts in deploy/bin/afframe-deploy, which must stay below it:
+    # a timeout would cut the SSH session in the middle of a switch.
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Security boundary: the Tailscale OIDC trust accepts only the main-ref subject.
+      # `environment:` on this job changes that subject and breaks the deploy.
+      id-token: write
+      pull-requests: read # the merged-PR check
+    defaults:
+      run:
+        shell: bash # -e and pipefail
+    env:
+      ROLLBACK: ${{ inputs.rollback }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The name goes to the remote shell, so only [a-z0-9-].
+      - name: Validate the rollback service name
+        if: inputs.rollback != ''
+        run: |
+          [[ "$ROLLBACK" =~ ^[a-z0-9][a-z0-9-]*$ && -f "deploy/services/$ROLLBACK.conf" ]] \
+            || { echo "::error::not a deployable service"; exit 1; }
+      - name: Check that a PR merge commit is deployed
+        if: inputs.rollback == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          merged="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq "[.[] | select(.merged_at != null
+            and .base.ref == \"main\" and .merge_commit_sha == \"$GITHUB_SHA\")] | length")"
+          ((merged > 0)) \
+            || { echo "::error::$GITHUB_SHA is not the merge commit of a pull request into main"; exit 1; }
+      - name: List the deployable services
+        id: services
+        if: inputs.rollback == ''
+        run: |
+          services=()
+          for conf in deploy/services/*.conf; do
+            [[ -e "$conf" ]] || continue
+            name="${conf##*/}"
+            [[ "${name%.conf}" =~ ^[a-z0-9][a-z0-9-]*$ ]] \
+              || { echo "::error::invalid service name: $name"; exit 1; }
+            services+=("${name%.conf}")
+          done
+          echo "list=${services[*]}" | tee -a "$GITHUB_OUTPUT"
+      - if: steps.services.outputs.list != ''
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # Compose builds in service-tests.sh (a service with a build target) load into Docker.
+          driver-opts: default-load=true
+      - if: steps.services.outputs.list != ''
+        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      - name: Build and test the images
+        id: build
+        if: steps.services.outputs.list != ''
+        env:
+          SERVICES: ${{ steps.services.outputs.list }}
+        run: |
+          read -ra services <<< "$SERVICES"
+          images="$(bash scripts/ci/build-images.sh "$GITHUB_SHA" "${services[@]}")"
+          images="${images//$'\n'/ }"
+          SERVICE_IMAGES="$images" bash scripts/ci/service-tests.sh "deploy-$GITHUB_RUN_ID"
+          echo "images=$images" >> "$GITHUB_OUTPUT"
+      - uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: ${{ secrets.TS_TAGS }}
+      # Host paths are relative to the deploy user's home: the layout is in deploy/bin/common.sh.
+      - name: Ship the release and deploy over Tailscale SSH
+        if: inputs.rollback == ''
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+          SERVICES: ${{ steps.services.outputs.list }}
+          IMAGES: ${{ steps.build.outputs.images }}
+        run: |
+          echo "::add-mask::${DEPLOY_TARGET#*@}"
+          host=(sudo tailscale ssh "$DEPLOY_TARGET")
+          git archive "$GITHUB_SHA" deploy ':(exclude)deploy/test' \
+            | "${host[@]}" "set -- $GITHUB_SHA"$'\n'"$(< deploy/bin/afframe-receive)"
+          read -ra services <<< "$SERVICES"
+          read -ra images <<< "$IMAGES"
+          images=("${images[@]#*=}")
+          { if ((${#images[@]})); then docker save "${images[@]}"; fi; } \
+            | "${host[@]}" "afframe/releases/$GITHUB_SHA/deploy/bin/afframe-deploy" \
+              deploy "$GITHUB_SHA" "$GITHUB_RUN_NUMBER" "${services[@]}"
+      - name: Roll back over Tailscale SSH
+        if: inputs.rollback != ''
+        env:
+          DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+        run: |
+          echo "::add-mask::${DEPLOY_TARGET#*@}"
+          sudo tailscale ssh "$DEPLOY_TARGET" afframe/current/deploy/bin/afframe-deploy rollback "$ROLLBACK" < /dev/null

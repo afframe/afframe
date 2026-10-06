@@ -1,0 +1,56 @@
+name: CI
+
+# The job id `ci` is a required check in .github/rulesets/main.json.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash # -e and pipefail
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks scans the history; ci-changes.sh diffs against the base parent
+          persist-credentials: false
+      - run: bash scripts/ci/repo-lint.sh
+      - name: Changes
+        id: changes
+        run: bash scripts/ci/ci-changes.sh "$(git rev-parse HEAD^1)" | tee -a "$GITHUB_OUTPUT"
+      - if: steps.changes.outputs.services != '[]' || steps.changes.outputs.integration == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          # Plain `docker build` and compose builds in integration.sh load into Docker.
+          driver-opts: default-load=true
+      - if: steps.changes.outputs.services != '[]'
+        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      - name: Build the changed services
+        if: steps.changes.outputs.services != '[]'
+        env:
+          SERVICES: ${{ steps.changes.outputs.services }}
+        run: |
+          mapfile -t names < <(jq -r '.[].name' <<< "$SERVICES")
+          images="$(bash scripts/ci/build-images.sh "ci-$GITHUB_RUN_ID" "${names[@]}")"
+          echo "SERVICE_IMAGES=${images//$'\n'/ }" >> "$GITHUB_ENV"
+      - name: Service tests (compose.ci.yml) against the built images
+        if: steps.changes.outputs.tests == 'true'
+        run: bash scripts/ci/service-tests.sh "ci-${GITHUB_RUN_ID}"
+      - name: Scan the built images for CVEs
+        if: steps.changes.outputs.services != '[]'
+        run: |
+          read -ra images <<< "$SERVICE_IMAGES"
+          bash scripts/ci/image-scan.sh CRITICAL "${images[@]}"
+      - name: Deploy integration
+        if: steps.changes.outputs.integration == 'true'
+        run: bash deploy/test/integration.sh

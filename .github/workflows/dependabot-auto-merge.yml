@@ -1,0 +1,42 @@
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        id: meta
+      - name: Enable auto-merge
+        if: >-
+          contains(fromJSON('["version-update:semver-patch", "version-update:semver-minor"]'),
+            steps.meta.outputs.update-type)
+          && steps.meta.outputs.package-ecosystem == 'docker'
+          && (contains(fromJSON('["/scripts/ci/toolbox", "/scripts/ci/trivy"]'), steps.meta.outputs.directory)
+            || startsWith(steps.meta.outputs.directory, '/deploy/test/images/'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_ID: ${{ github.event.pull_request.node_id }}
+          # The mutation never merges at once: GitHub refuses it for a PR that can merge now.
+          QUERY: >-
+            mutation($id: ID!) { enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: SQUASH})
+            { clientMutationId } }
+        run: |
+          gh api graphql -f id="$PR_ID" -f query="$QUERY" \
+            || echo "::notice::Auto-merge not enabled: the repository setting is off or the PR can merge now."

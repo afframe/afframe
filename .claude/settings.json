@@ -1,0 +1,44 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "enabledMcpjsonServers": ["codegraph"],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__.*github.*__(create|update|merge)_pull_request",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-title.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|mcp__.*github.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/published-text.sh\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/setup.sh\" --hook"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": ["mcp__codegraph__*"],
+    "deny": ["Bash(git push --force:*)", "Bash(git push -f:*)"]
+  }
+}

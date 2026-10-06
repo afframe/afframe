@@ -1,0 +1,22 @@
+# A new root build input goes into label_of in scripts/ci/build-images.sh and into the
+# shared pattern of scripts/ci/ci-changes.sh too.
+*
+!apps
+!packages
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+
+**/node_modules
+**/.npmrc
+**/dist
+**/.next
+**/out
+**/coverage
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx

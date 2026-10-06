@@ -1,0 +1,74 @@
+name: afframe
+
+services:
+  traefik:
+    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
+    container_name: ${COMPOSE_PROJECT_NAME:?}-traefik
+    restart: unless-stopped
+    mem_limit: 256m
+    # Traefik reads traefik.yml and the certificate only at start, and compose does not recreate it
+    # for a changed bind-mounted file: afframe-deploy puts a hash of those files in this label.
+    labels:
+      afframe.config-hash: "${AFFRAME_TRAEFIK_HASH:-}"
+    ports:
+      - "${AFFRAME_HTTP_PORT:-80}:80"
+      - "${AFFRAME_HTTPS_PORT:-443}:443"
+    volumes:
+      - ${AFFRAME_HOME:?}/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ${AFFRAME_HOME:?}/traefik/dynamic:/etc/traefik/dynamic:ro
+      - ${AFFRAME_HOME:?}/tls:/etc/traefik/tls:ro
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  postgres:
+    build: ./postgres
+    image: ${COMPOSE_PROJECT_NAME:?}-postgres:local
+    container_name: ${COMPOSE_PROJECT_NAME:?}-postgres
+    restart: unless-stopped
+    mem_limit: 2g
+    shm_size: 256m
+    # Rendered by deploy/bin/vault-env.
+    env_file:
+      - path: ${AFFRAME_HOME:?}/env/infra.env
+        format: raw
+    environment:
+      PGBACKREST_REPO1_RETENTION_FULL: "4"
+      PGBACKREST_START_FAST: "y"
+      PGBACKREST_PROCESS_MAX: "2"
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=pgbackrest archive-push %p
+      - -c
+      - archive_timeout=60
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - pgbackrest:/var/lib/pgbackrest
+    networks: [db]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+# Literal names: a rename detaches the data. deploy/test/afframe-deploy.test.sh asserts them.
+volumes:
+  # Never `docker compose down -v` on the deploy host: it deletes this volume.
+  postgres-data:
+    name: afframe-postgres-data
+  # A named volume, so the postgres user owns it.
+  pgbackrest:
+    name: afframe-pgbackrest
+
+networks:
+  edge:
+    name: ${COMPOSE_PROJECT_NAME:?}-edge
+  db:
+    name: ${COMPOSE_PROJECT_NAME:?}-db
+    internal: true

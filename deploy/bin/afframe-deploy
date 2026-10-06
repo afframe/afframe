@@ -1,0 +1,493 @@
+#!/usr/bin/env bash
+# Usage: afframe-deploy deploy <git-sha> <run-number> [<service>...] | rollback <service>
+# deploy reads `docker save` of the images on stdin. deploy.yml runs it from the new release.
+set -euo pipefail
+# shellcheck source=deploy/bin/common.sh
+source "$(dirname "$0")/common.sh"
+
+HEALTH_TRIES="${AFFRAME_HEALTH_TRIES:-60}"
+HEALTH_PASSES="${AFFRAME_HEALTH_PASSES:-3}"
+MIGRATE_TIMEOUT="${AFFRAME_MIGRATE_TIMEOUT:-300}"
+MIGRATE_KILL_AFTER="${AFFRAME_MIGRATE_KILL_AFTER:-10}" # seconds after TERM
+SWITCH_TIMEOUT="${AFFRAME_SWITCH_TIMEOUT:-15}"         # about seconds: one Traefik probe a second
+STOP_GRACE=30
+export AFFRAME_HOME
+
+# pending: new colours removed on exit. live: live colour per service (- for none). retired: old
+# colours to stop. switched: "<service> <host> <name>". undo_dir: saved routes and states.
+pending=()
+live=()
+retired=()
+switched=()
+undo_dir=""
+
+compose() { docker compose -p "$PROJECT" -f "$REPO/deploy/compose.prod.yml" "$@"; }
+
+cleanup() {
+  local name
+  for name in "${pending[@]}"; do
+    docker rm -f "$name" > /dev/null 2>&1 || true
+  done
+  [[ -z "$undo_dir" ]] || rm -rf "$undo_dir"
+}
+
+# Failures name paths relative to AFFRAME_HOME, never the shell's or a tool's message: Actions logs
+# are public and those messages hold the absolute host path.
+lock() {
+  mkdir -p "$AFFRAME_HOME" 2> /dev/null || die "cannot create AFFRAME_HOME"
+  { exec 9> "$AFFRAME_HOME/deploy.lock"; } 2> /dev/null || die "cannot open deploy.lock"
+  flock -n 9 || die "another deploy is running"
+}
+
+# write_file <file in AFFRAME_HOME>: atomic, so Traefik's watcher never sees half a file.
+write_file() {
+  local status=0
+  { cat > "$1.tmp" && mv "$1.tmp" "$1"; } 2> /dev/null || status=$?
+  ((status == 0)) || echo "${0##*/}: cannot write ${1#"$AFFRAME_HOME/"}" >&2
+  return "$status"
+}
+
+# quiet <log> <command>...: output to log/<log> on the host. Actions logs are public.
+quiet() {
+  local log="$1" status=0
+  shift
+  (umask 077 && mkdir -p "$AFFRAME_HOME/log" && : > "$AFFRAME_HOME/log/$log") 2> /dev/null \
+    || { echo "${0##*/}: cannot write log/$log on the deploy host" >&2; return 1; }
+  { "$@" > "$AFFRAME_HOME/log/$log" 2>&1; } 2> /dev/null || status=$?
+  ((status == 0)) || echo "${0##*/}: output kept on the deploy host in log/$log" >&2
+  return "$status"
+}
+
+# prune_images: removes $PROJECT/* references to images that are no service's current or previous.
+prune_images() {
+  local keep="" ref id states state kind current previous
+  # No service state yet (infrastructure-only first deploy): nothing to keep.
+  shopt -s nullglob
+  states=("$AFFRAME_HOME"/state/*)
+  shopt -u nullglob
+  # Tags :current and :previous first: a re-run moves the <git-sha> tag, untagged images are pruned.
+  for state in "${states[@]}"; do
+    current="" previous=""
+    read_vars "$state" current previous
+    for kind in current previous; do
+      [[ -z "${!kind}" ]] || docker tag "${!kind}" "$PROJECT/${state##*/}:$kind" 2> /dev/null \
+        || echo "warning: ${state##*/}: $kind image ${!kind} is gone" >&2
+    done
+  done
+  # Never || true: an empty keep would prune the current images.
+  ((${#states[@]} == 0)) || keep="$(sed -n 's/^\(current\|previous\)=//p' "${states[@]}" 2> /dev/null)" \
+    || die "cannot read state/"
+  docker image ls --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}' \
+    | while read -r ref id; do
+      [[ "$ref" == "$PROJECT"/* ]] || continue
+      grep -qxF "$id" <<< "$keep" || docker image rm "$ref" > /dev/null 2>&1 || true
+    done
+  docker image prune -f > /dev/null 2>&1 || true
+  docker builder prune -f --filter until=168h > /dev/null 2>&1 || true
+}
+
+# Physical paths, like REPO, so a symlink in AFFRAME_HOME never makes this release look old.
+prune_releases() {
+  local dir releases
+  releases="$(cd -P "$AFFRAME_HOME/releases" 2> /dev/null && pwd)" || die "cannot open releases"
+  for dir in "$releases"/*/; do
+    dir="${dir%/}"
+    [[ ! -d "$dir" || "$dir" == "$REPO" || "$dir" == "$1" ]] || rm -rf "$dir" 2> /dev/null \
+      || echo "warning: could not remove release ${dir##*/}" >&2
+  done
+}
+
+# Route files share traefik/dynamic/ with the static files there, so those names are reserved.
+valid_service() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ && ! -e "$REPO/deploy/traefik/dynamic/$1.yml" ]]; }
+
+# infra_hash: includes the variables that `compose up` interpolates.
+infra_hash() {
+  {
+    printf '%s\n' "$AFFRAME_HOME" "${AFFRAME_HTTP_PORT:-}" "${AFFRAME_HTTPS_PORT:-}"
+    cd "$REPO/deploy"
+    find compose.prod.yml postgres traefik -type f -print0 | sort -z | xargs -0 sha256sum
+    sha256sum < "$AFFRAME_HOME/env/infra.env"
+    find "$AFFRAME_HOME/tls" -type f -print0 | sort -z | xargs -0r sha256sum
+  } | sha256sum | cut -d' ' -f1
+}
+
+# traefik_hash: the files that Traefik reads only at start.
+traefik_hash() {
+  {
+    sha256sum < "$REPO/deploy/traefik/traefik.yml"
+    find "$AFFRAME_HOME/tls" -type f -print0 | sort -z | xargs -0r sha256sum
+  } | sha256sum | cut -d' ' -f1
+}
+
+infra_running() {
+  local running
+  running="$(docker container inspect -f '{{.State.Running}}' "$TRAEFIK" "$POSTGRES" 2> /dev/null)"
+  [[ "$running" == $'true\ntrue' ]]
+}
+
+prepare() {
+  mkdir -p "$AFFRAME_HOME"/{env,tls,state,traefik/dynamic} 2> /dev/null \
+    || die "cannot create env, tls, state or traefik/dynamic in AFFRAME_HOME"
+  quiet vault-env.log "$REPO/deploy/bin/vault-env"
+  # Only changed files, atomically: Traefik's watcher reloads on every write. traefik.yml too: the
+  # Traefik container mounts it from AFFRAME_HOME, never from a release that pruning removes.
+  local src dst
+  for src in "$REPO"/deploy/traefik/dynamic/*.yml "$REPO/deploy/traefik/traefik.yml"; do
+    dst="$AFFRAME_HOME/traefik/${src#"$REPO/deploy/traefik/"}"
+    cmp -s "$src" "$dst" || write_file "$dst" < "$src"
+  done
+  # Applied only when its inputs changed (or it is not running), so an app deploy neither
+  # recreates Postgres and Traefik nor depends on the backup repository (stanza-create).
+  local now hash=""
+  now="$(infra_hash)"
+  read_vars "$AFFRAME_HOME/state/.infra" hash
+  if [[ "$now" == "$hash" ]] && infra_running; then
+    log "infrastructure unchanged"
+    return 0
+  fi
+  log "infrastructure"
+  AFFRAME_TRAEFIK_HASH="$(traefik_hash)"
+  export AFFRAME_TRAEFIK_HASH
+  quiet compose-up.log compose up -d --build --wait --quiet-pull
+  quiet stanza-create.log docker exec -u postgres "$POSTGRES" pgbackrest stanza-create
+  printf 'hash=%s\n' "$now" | write_file "$AFFRAME_HOME/state/.infra"
+}
+
+# live_colour <service>: route colour, else state colour, else the only running one; fails on two.
+live_colour() {
+  local service="$1" colour="" running
+  local route="$AFFRAME_HOME/traefik/dynamic/$service.yml"
+  if [[ -f "$route" ]]; then
+    colour="$(sed -n "s/^ *- url: http:\/\/$PROJECT-$service-\(blue\|green\):.*/\1/p" "$route" | head -n 1)"
+  fi
+  [[ -n "$colour" ]] || read_vars "$AFFRAME_HOME/state/$service" colour
+  if [[ -z "$colour" ]]; then
+    running="$(docker ps --format '{{.Names}}' | sed -n "s/^$PROJECT-$service-\(blue\|green\)$/\1/p" | sort -u)"
+    # A lost route and state must never make the live colour look idle.
+    if [[ "$running" == *$'\n'* ]]; then
+      echo "$service: both colours run and neither route nor state names the live one" >&2
+      return 1
+    fi
+    colour="$running"
+  fi
+  echo "$colour"
+}
+
+# load_service <service> [<live colour>|-]: sets manifest, state, colour, new, name and old.
+load_service() {
+  local manifest="$REPO/deploy/services/$1.conf"
+  [[ -f "$manifest" ]] || die "no manifest deploy/services/$1.conf"
+  read_vars "$manifest" HOST PORT MEMORY MIGRATE
+  read_vars "$AFFRAME_HOME/state/$1" current previous
+  # Later phases pass the resolved colour: live_colour would take the new one for live.
+  if (($# > 1)); then
+    colour="${2#-}"
+  else
+    colour="$(live_colour "$1")" || exit 1
+  fi
+  new=blue
+  [[ "$colour" == blue ]] && new=green
+  name="$PROJECT-$1-$new" old="$PROJECT-$1-$colour"
+}
+
+# tree_of <image>: its afframe.tree label (scripts/ci/build-images.sh), empty without one or image.
+tree_of() {
+  docker image inspect -f '{{range $k, $v := .Config.Labels}}{{if eq $k "afframe.tree"}}{{$v}}{{end}}{{end}}' \
+    "$1" 2> /dev/null || true
+}
+
+# same_image <image ID> <image ID>: both carry the same non-empty afframe.tree label (fails closed).
+same_image() {
+  [[ -n "$1" && -n "$2" ]] || return 1
+  local tree
+  tree="$(tree_of "$1")"
+  [[ -n "$tree" && "$tree" == "$(tree_of "$2")" ]]
+}
+
+# load_images <git-sha> <service>...: loads stdin, prints "<service>=<image ID>" per changed one.
+load_images() {
+  local sha="$1" service id current held
+  shift
+  (($#)) || return 0
+  [[ ! -t 0 ]] || die "no images on stdin"
+  docker load -q >&2 || die "docker load failed; nothing switched"
+  for service in "$@"; do
+    # The ID comes from this host's store, never from the runner.
+    # scripts/ci/build-images.sh tags the images in the same Compose project namespace.
+    id="$(docker image inspect -f '{{.Id}}' "$PROJECT/$service:$sha" 2> /dev/null)" \
+      || die "$service: $PROJECT/$service:$sha not in the image stream; nothing switched"
+    current="" held=""
+    read_vars "$AFFRAME_HOME/state/$service" current held
+    if same_image "$id" "$held"; then
+      log "$service: held at its rollback; skipped until a different image arrives" >&2
+    elif same_image "$id" "$current"; then
+      log "$service: image unchanged" >&2
+    else
+      echo "$service=$id"
+    fi
+  done
+}
+
+# start_service <service> <image> <yes|no>: yes runs the migration first.
+start_service() {
+  local service="$1" image="$2" migrate="$3"
+  local HOST="" PORT="" MEMORY="" MIGRATE="" current="" colour="" previous="" new="" name="" old=""
+  load_service "$service"
+  live+=("${colour:--}")
+
+  if [[ "$migrate" == yes && -n "$MIGRATE" ]]; then
+    log "$service: migrate"
+    # A fixed name, so a migration left behind by a killed deploy is removed before the next one.
+    local migration="$PROJECT-$service-migrate"
+    docker rm -f "$migration" > /dev/null 2>&1 || true
+    # TERM after the timeout, KILL a grace period later (a migration ignoring TERM would keep the
+    # client waiting); then the named container goes too, as killing the client does not stop it.
+    # shellcheck disable=SC2086 # MIGRATE is a command line from the manifest
+    if ! quiet "$migration.log" timeout -k "$MIGRATE_KILL_AFTER" "$MIGRATE_TIMEOUT" \
+      docker run --rm --name "$migration" --network "$DB_NETWORK" --env-file "$AFFRAME_HOME/env/app.env" \
+      "$image" $MIGRATE; then
+      docker rm -f "$migration" > /dev/null 2>&1 || true
+      die "$service: migration not run, failed or timed out; nothing switched"
+    fi
+  fi
+
+  pending+=("$name")
+  docker rm -f "$name" > /dev/null 2>&1 || true
+  # On the db network before its first instruction runs. quiet: docker errors name the env file path.
+  quiet "$name-create.log" docker create --name "$name" --network "$EDGE_NETWORK" --restart unless-stopped \
+    --memory "$MEMORY" --env-file "$AFFRAME_HOME/env/app.env" -e PORT="$PORT" --label afframe.service="$service" \
+    "$image"
+  docker network connect "$DB_NETWORK" "$name"
+  docker start "$name" > /dev/null
+}
+
+# wait_healthy <service> <live colour>: runs as a background job, so it returns and never exits.
+wait_healthy() {
+  local service="$1"
+  local HOST="" PORT="" MEMORY="" MIGRATE="" current="" colour="" previous="" new="" name="" old=""
+  load_service "$service" "$2"
+  log "$service: wait for $HEALTH_PASSES consecutive /health passes on $name"
+  local i passes=0
+  for ((i = 1; i <= HEALTH_TRIES; i++)); do
+    if docker exec "$TRAEFIK" wget -q -T 2 -O /dev/null "http://$name:$PORT/health" 2> /dev/null; then
+      passes=$((passes + 1))
+      ((passes < HEALTH_PASSES)) || return 0
+    else
+      passes=0
+    fi
+    sleep 1
+  done
+  quiet "$name.log" docker logs --tail 50 "$name" 2> /dev/null || true # the next line names the log
+  echo "$service: health check failed; container logs kept on the deploy host in log/$name.log" >&2
+  return 1
+}
+
+# start_all <yes|no> <service>=<image>...: waits until all are healthy.
+start_all() {
+  local migrate="$1" spec pid i=0 failed=0 pids=()
+  shift
+  for spec in "$@"; do
+    start_service "${spec%%=*}" "${spec#*=}" "$migrate"
+  done
+  for spec in "$@"; do
+    wait_healthy "${spec%%=*}" "${live[i]}" & # not live[i++]: that would count in the job
+    pids+=("$!")
+    i=$((i + 1))
+  done
+  for pid in "${pids[@]}"; do
+    wait "$pid" || failed=1
+  done
+  ((failed == 0)) || die "health check failed; nothing switched"
+}
+
+switch_service() {
+  local service="$1" image="$2" held="${4:-}"
+  local HOST="" PORT="" MEMORY="" MIGRATE="" current="" colour="" previous="" new="" name="" old=""
+  load_service "$service" "$3"
+  local route="$AFFRAME_HOME/traefik/dynamic/$service.yml" state="$AFFRAME_HOME/state/$service"
+  [[ ! -f "$route" ]] || cp "$route" "$undo_dir/$service.route" 2> /dev/null || die "$service: cannot save its route"
+  [[ ! -f "$state" ]] || cp "$state" "$undo_dir/$service.state" 2> /dev/null || die "$service: cannot save its state"
+  # One file, so one Traefik reload moves the public router and the confirm router together.
+  write_file "$route" <<YAML
+http:
+  routers:
+    $service:
+      rule: Host(\`$HOST\`)
+      entryPoints: [websecure]
+      middlewares: [public-headers]
+      service: $service
+      tls: {}
+    $service-confirm:
+      rule: Host(\`$HOST\`)
+      entryPoints: [confirm]
+      middlewares: [$service-backend]
+      service: $service
+  middlewares:
+    $service-backend:
+      headers:
+        customResponseHeaders:
+          X-Backend: $name
+  services:
+    $service:
+      loadBalancer:
+        servers:
+          - url: http://$name:$PORT
+YAML
+  printf 'current=%s\ncolour=%s\nprevious=%s\nheld=%s\n' "$image" "$new" "$current" "$held" \
+    | write_file "$state"
+  switched+=("$service $HOST $name")
+  [[ -z "$colour" ]] || retired+=("$old")
+  log "$service: routed to $name"
+}
+
+# backend_of <host>: X-Backend of GET /health on the confirm entrypoint, empty without a 2xx answer.
+backend_of() {
+  # The confirm address pairs with entryPoints.confirm in deploy/traefik/traefik.yml.
+  { docker exec "$TRAEFIK" wget -S -q -T 2 -O /dev/null \
+    --header "Host: $1" http://127.0.0.1:8081/health 2>&1 || true; } \
+    | sed -n 's/^ *X-Backend: *//p' | tr -d '\r' | head -n 1
+}
+
+confirm_switch() {
+  local i entry service host name left waiting=("${switched[@]}")
+  for ((i = 0; i <= SWITCH_TIMEOUT; i++)); do
+    ((i == 0)) || sleep 1
+    left=()
+    for entry in "${waiting[@]}"; do
+      read -r service host name <<< "$entry"
+      [[ "$(backend_of "$host")" == "$name" ]] || left+=("$entry")
+    done
+    ((${#left[@]})) || return 0
+    waiting=("${left[@]}")
+  done
+  for entry in "${waiting[@]}"; do
+    echo "${entry%% *}: Traefik does not serve ${entry##* } after ${SWITCH_TIMEOUT}s" >&2
+  done
+  return 1
+}
+
+# route_back: both colours keep running.
+route_back() {
+  local entry service
+  for entry in "${switched[@]}"; do
+    service="${entry%% *}"
+    [[ -f "$undo_dir/$service.route" ]] || continue # first deploy: no old colour to go back to
+    write_file "$AFFRAME_HOME/traefik/dynamic/$service.yml" < "$undo_dir/$service.route"
+    if [[ -f "$undo_dir/$service.state" ]]; then
+      write_file "$AFFRAME_HOME/state/$service" < "$undo_dir/$service.state"
+    else
+      # The live colour comes from the route again.
+      rm -f "$AFFRAME_HOME/state/$service" 2> /dev/null || die "$service: cannot remove state/$service"
+    fi
+    log "$service: routed back"
+  done
+}
+
+switch_all() {
+  local spec i=0 held=""
+  [[ "${1:-}" != held=* ]] || { held="${1#held=}"; shift; }
+  undo_dir="$(mktemp -d)"
+  # Every new colour is healthy and about to take traffic: none is removed on exit any more, or a
+  # failure between two route writes would take down a service already switched.
+  pending=()
+  for spec in "$@"; do
+    switch_service "${spec%%=*}" "${spec#*=}" "${live[i++]}" "$held"
+  done
+  if ! confirm_switch; then
+    route_back
+    die "switch not confirmed; routed back, old colours left running"
+  fi
+  retire_old
+}
+
+retire_old() {
+  local old
+  ((${#retired[@]})) || return 0
+  # Traffic and state already point at the new colours: a leftover old container is only reported.
+  docker stop -t "$STOP_GRACE" "${retired[@]}" > /dev/null 2>&1 || true
+  for old in "${retired[@]}"; do
+    docker rm -f "$old" > /dev/null 2>&1 || echo "warning: could not remove $old" >&2
+  done
+}
+
+retire_removed() {
+  local state service colour names
+  shopt -s nullglob
+  for state in "$AFFRAME_HOME"/state/*; do
+    service="${state##*/}"
+    [[ ! -f "$REPO/deploy/services/$service.conf" ]] || continue
+    log "$service: removed from deploy/services; retiring its route, containers and state"
+    rm -f "$AFFRAME_HOME/traefik/dynamic/$service.yml" 2> /dev/null \
+      || die "$service: cannot remove traefik/dynamic/$service.yml"
+    names="$(docker ps -a --format '{{.Names}}')"
+    for colour in blue green; do
+      grep -qxF "$PROJECT-$service-$colour" <<< "$names" || continue
+      docker rm -f "$PROJECT-$service-$colour" > /dev/null 2>&1 \
+        || echo "warning: could not remove $PROJECT-$service-$colour" >&2
+    done
+    rm -f "$state" 2> /dev/null || die "$service: cannot remove state/$service"
+  done
+  shopt -u nullglob
+}
+
+validate_services() {
+  local service seen=" "
+  for service in "$@"; do
+    valid_service "$service" || die "invalid service: $service"
+    [[ -f "$REPO/deploy/services/$service.conf" ]] || die "no manifest deploy/services/$service.conf"
+    [[ "$seen" != *" $service "* ]] || die "service listed twice: $service"
+    seen+="$service "
+  done
+}
+
+main() {
+  case "${1:-}" in
+    deploy)
+      local sha="${2:-}" run="${3:-}"
+      [[ "$sha" =~ ^[0-9a-f]{40}$ && "$run" =~ ^[0-9]+$ ]] \
+        || die "usage: deploy <git-sha> <run-number> [<service> ...]"
+      local services=("${@:4}")
+      validate_services "${services[@]}"
+      lock
+      # A re-run of an older run never replaces a newer deploy. The same run again may.
+      local deployed="$AFFRAME_HOME/state/.deployed" deployed_run="" previous_release="" out specs=()
+      [[ ! -f "$deployed" ]] || deployed_run="$(sed -n 's/^run=//p' "$deployed" 2> /dev/null)" \
+        || die "cannot read state/.deployed"
+      if [[ -n "$deployed_run" ]] && ((run < deployed_run)); then
+        die "run $run is older than the deployed run $deployed_run; nothing deployed"
+      fi
+      trap cleanup EXIT
+      out="$(load_images "$sha" "${services[@]}")"
+      [[ -z "$out" ]] || mapfile -t specs <<< "$out"
+      prepare
+      start_all yes "${specs[@]}"
+      retire_removed
+      switch_all "${specs[@]}"
+      printf 'sha=%s\nrun=%s\n' "$sha" "$run" | write_file "$AFFRAME_HOME/state/.deployed"
+      [[ ! -L "$AFFRAME_HOME/current" ]] || previous_release="$(readlink "$AFFRAME_HOME/current")"
+      { ln -sfn "$REPO" "$AFFRAME_HOME/current.tmp" && mv -T "$AFFRAME_HOME/current.tmp" "$AFFRAME_HOME/current"; } \
+        2> /dev/null || die "cannot point current at this release"
+      # The current release again: the release before it is unknown here, so nothing is pruned.
+      [[ "$previous_release" == "$REPO" ]] || prune_releases "$previous_release"
+      prune_images
+      log "deployed $sha (run $run)"
+      ;;
+    rollback)
+      local service="${2:-}" current="" previous=""
+      valid_service "$service" || die "usage: rollback <service>"
+      lock
+      trap cleanup EXIT
+      read_vars "$AFFRAME_HOME/state/$service" current previous
+      [[ -n "$previous" ]] || die "$service: no previous image to roll back to"
+      docker image inspect "$previous" > /dev/null 2>&1 || die "$service: previous image $previous is gone"
+      start_all no "$service=$previous"
+      switch_all "held=$current" "$service=$previous"
+      log "$service: rolled back; $current is held until a different image is deployed"
+      ;;
+    *)
+      die "usage: afframe-deploy deploy <git-sha> <run-number> [<service> ...] | rollback <service>"
+      ;;
+  esac
+}
+
+main "$@"

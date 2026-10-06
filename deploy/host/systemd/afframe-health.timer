@@ -1,0 +1,10 @@
+[Unit]
+Description=afframe health
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=afframe@health.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,37 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = "bash scripts/setup.sh"
+archive = "bash scripts/conductor/archive.sh"
+run_mode = "concurrent"
+
+[scripts.run.gate]
+command = "bash scripts/ci/local-gate.sh"
+icon = "check"
+default = true
+
+[scripts.run.dev]
+command = "bash scripts/dev/stack.sh up"
+icon = "database"
+available_in = ["local"]
+
+[scripts.run.codegraph]
+command = "bash scripts/setup.sh"
+icon = "network"
+
+[git]
+archive_on_merge = true
+
+[prompts]
+create_pr = """\
+Commit and push the work. Open a pull request into main with a Conventional Commit title \
+that passes scripts/ci/pr-title.sh. Fill in every section of .github/pull_request_template.md."""
+code_review = """\
+Review the diff against AGENTS.md, docs/conventions.md and ARCHITECTURE.md. \
+Report file:line findings only."""
+fix_errors = """\
+Fix the cause of each failed check. Do not skip or weaken a check. \
+Then run bash scripts/ci/local-gate.sh."""
+resolve_merge_conflicts = """\
+Resolve the conflicts. Regenerate pnpm-lock.yaml with pnpm install instead of merging it by hand. \
+Then run bash scripts/ci/local-gate.sh."""

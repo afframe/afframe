@@ -1,0 +1,28 @@
+name: PR title
+
+# The job id `pr-title` is a required check in .github/rulesets/main.json.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/ci/pr-title.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Check the title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: bash scripts/ci/pr-title.sh "$PR_TITLE"

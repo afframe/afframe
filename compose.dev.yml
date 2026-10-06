@@ -1,0 +1,19 @@
+# Usage: bash scripts/dev/stack.sh up | down. Never `docker compose up` without -p.
+services:
+  postgres:
+    build: deploy/postgres
+    mem_limit: 512m
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust # dev only: the port binds to localhost
+    ports:
+      - "127.0.0.1:${DB_PORT:?}:5432"
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 2s
+      retries: 30
+
+# No `name:`: integration.sh refuses a daemon that has the prod Postgres data volume.
+volumes:
+  postgres:

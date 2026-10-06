@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  review_status: false
+  poem: false
+  high_level_summary_in_walkthrough: true
+  in_progress_fortune: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    title:
+      mode: "off"
+    description:
+      mode: "off"
+    issue_assessment:
+      mode: "off"
+  path_filters:
+    - "!pnpm-lock.yaml"
+    - "!LICENSE"
+    - "!LICENSES/**"
+    - "!REUSE.toml"
+    - "!README.md"
+    - "!SECURITY.md"
+    - "!docs/adr/**"
+    - "!docs/templates/**"
+  auto_review:
+    enabled: false
+chat:
+  allow_non_org_members: false
+knowledge_base:
+  code_guidelines:
+    enabled: true
