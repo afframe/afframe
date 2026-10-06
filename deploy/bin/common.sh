@@ -62,25 +62,13 @@ wait_recovered() {
 
 # heartbeat <KEY> <exit code> [message]: ALERT_URL as well on a failure.
 heartbeat() {
-  local url alert
+  local url alert ping=(curl -fsS -m 10 --retry 3 -o /dev/null)
   url="$(env_value "$1")"
   alert="$(env_value ALERT_URL)"
   if [[ "$2" -eq 0 ]]; then
-    [[ -z "$url" ]] || curl -fsS -m 10 --retry 3 -o /dev/null "$url" || echo "heartbeat $1 failed" >&2
+    [[ -z "$url" ]] || "${ping[@]}" "$url" || echo "heartbeat $1 failed" >&2
     return 0
   fi
-  [[ -z "$url" ]] || curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "${3:-}" "$url/$2" \
-    || echo "heartbeat $1 failed" >&2
-  [[ -z "$alert" ]] || curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "${0##*/}: ${3:-failed}" "$alert" \
-    || echo "alert failed" >&2
-}
-
-# write_sentinel: upserts the ops.heartbeat row that afframe-restore-drill checks; only warns.
-write_sentinel() {
-  log "heartbeat sentinel"
-  psql_exec "$POSTGRES" -q -v ON_ERROR_STOP=1 -c "
-    create schema if not exists ops;
-    create table if not exists ops.heartbeat (id int primary key, at timestamptz not null);
-    insert into ops.heartbeat values (1, now()) on conflict (id) do update set at = excluded.at" \
-    || echo "warning: ops.heartbeat sentinel not written; the restore drill will report stale data" >&2
+  [[ -z "$url" ]] || "${ping[@]}" --data-raw "${3:-}" "$url/$2" || echo "heartbeat $1 failed" >&2
+  [[ -z "$alert" ]] || "${ping[@]}" --data-raw "${0##*/}: ${3:-failed}" "$alert" || echo "alert failed" >&2
 }
