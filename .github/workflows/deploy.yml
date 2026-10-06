@@ -84,6 +84,13 @@ jobs:
           images="${images//$'\n'/ }"
           SERVICE_IMAGES="$images" bash scripts/ci/service-tests.sh "deploy-$GITHUB_RUN_ID"
           echo "images=$images" >> "$GITHUB_OUTPUT"
+      - name: Scan the images for CVEs
+        if: inputs.rollback == '' && steps.services.outputs.list != ''
+        env:
+          IMAGES: ${{ steps.build.outputs.images }}
+        run: |
+          read -ra images <<< "$IMAGES"
+          bash scripts/ci/image-scan.sh CRITICAL "${images[@]}"
       - uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
