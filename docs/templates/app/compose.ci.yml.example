@@ -1,0 +1,75 @@
+# Usage: copy to compose.ci.yml at the repository root and replace `web` with the app folder name.
+# Per app: migrate-<name>, test-<name>, <name> and probe-<name>, listed in `migrate` and `test`.
+x-done: &done
+  condition: service_completed_successfully
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: apps/web/Dockerfile
+  environment:
+    # User and database are the ENV of deploy/postgres/Dockerfile.
+    DATABASE_URL: postgres://afframe@postgres:5432/afframe
+    # Not the image default, so the probe proves that the service reads $PORT.
+    PORT: "9090"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    build: deploy/postgres
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # service-tests.sh runs only `migrate`, then `test`. Their exit codes cover every app.
+  migrate:
+    build: deploy/postgres
+    entrypoint: ["true"]
+    depends_on:
+      migrate-web: *done
+
+  test:
+    build: deploy/postgres
+    entrypoint: ["true"]
+    depends_on:
+      test-web: *done
+      probe-web: *done
+
+  # The same command as MIGRATE in deploy/services/web.conf.
+  migrate-web:
+    <<: *app
+    command: ["node", "dist/migrate.js"]
+
+  test-web:
+    <<: *app
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: test
+
+  web:
+    <<: *app
+    depends_on:
+      migrate-web: *done
+    # Docker may disable IPv6 in containers: turn it on so the [::1] check below is real.
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: 0
+
+  probe-web:
+    <<: *app
+    network_mode: service:web
+    depends_on: [web]
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        for url in "http://127.0.0.1:$$PORT/health" "http://[::1]:$$PORT/health"; do
+          for _ in $$(seq 50); do wget -q -O /dev/null "$$url" && break; sleep 0.2; done
+          wget -q -O /dev/null "$$url" || { echo "GET $$url failed" >&2; exit 1; }
+          echo "ok $$url"
+        done

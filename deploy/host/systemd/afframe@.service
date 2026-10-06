@@ -1,0 +1,9 @@
+[Unit]
+Description=afframe %i (deploy/bin/afframe-%i)
+After=docker.service
+
+[Service]
+Type=oneshot
+# User= comes from a host drop-in, and systemd sets HOME for User=. $$ is a literal $. The path is
+# the AFFRAME_HOME default of deploy/bin/common.sh.
+ExecStart=/bin/sh -c 'exec "$$HOME/afframe/current/deploy/bin/afframe-%i"'

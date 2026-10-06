@@ -1,0 +1,66 @@
+# Titles like `chore(deps): bump ...`: the PR title check requires Conventional Commits.
+# dependabot-auto-merge.yml merges only the CI-only docker entry. Keep deployed images apart.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
+  # Deployed: a merge to main deploys these images.
+  - package-ecosystem: docker
+    directories: ["/apps/*", "/deploy/postgres"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+  - package-ecosystem: docker
+    directories: ["/scripts/ci/toolbox", "/scripts/ci/trivy", "/deploy/test/images/*"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+  - package-ecosystem: docker
+    directory: /docs/templates/app
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+  - package-ecosystem: docker-compose
+    directory: /deploy
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    # TypeScript stays on 6.0 until typescript-eslint supports 7: docs/adr/0002-typescript-6.md.
+    ignore:
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]

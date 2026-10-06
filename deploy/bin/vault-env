@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Usage: vault-env
+# Inputs VAULT_ADDR, AFFRAME_VAULT_KV_PREFIX, VAULT_TOKEN: environment or AFFRAME_HOME files
+set -euo pipefail
+# shellcheck source=deploy/bin/common.sh
+source "$(dirname "$0")/common.sh"
+
+# shellcheck disable=SC1091 # host config, not in the repo
+[[ ! -f "$AFFRAME_HOME/host.conf" ]] || source "$AFFRAME_HOME/host.conf"
+[[ -n "${VAULT_TOKEN:-}" || ! -f "$AFFRAME_HOME/vault-token" ]] || VAULT_TOKEN="$(< "$AFFRAME_HOME/vault-token")"
+: "${VAULT_ADDR:?VAULT_ADDR is not set}" "${AFFRAME_VAULT_KV_PREFIX:?AFFRAME_VAULT_KV_PREFIX is not set}" \
+  "${VAULT_TOKEN:?VAULT_TOKEN is not set}"
+# Traefik runs as root in its container: the files stay unreadable for other host users.
+umask 077
+mkdir -p "$AFFRAME_HOME/env" "$AFFRAME_HOME/tls"
+
+# The token goes to curl on stdin (-H @-), never on its command line, where `ps` would show it.
+read_kv() {
+  curl -fsS -m 10 -H @- "$VAULT_ADDR/v1/$AFFRAME_VAULT_KV_PREFIX/$1" <<< "X-Vault-Token: $VAULT_TOKEN" \
+    | jq -e '.data.data'
+}
+
+# write_env <json> <file>: KEY=VALUE lines for every key except *_PEM; refuses multi-line values.
+write_env() {
+  jq -r 'to_entries[] | select(.key | endswith("_PEM") | not)
+    | if (.value | tostring | contains("\n")) then error("multi-line value for \(.key)")
+      else "\(.key)=\(.value)" end' <<< "$1" > "$2.tmp"
+  mv "$2.tmp" "$2"
+}
+
+infra="$(read_kv infra)" || die "cannot read the infra secret"
+app="$(read_kv app)" || die "cannot read the app secret"
+
+write_env "$infra" "$AFFRAME_HOME/env/infra.env"
+write_env "$app" "$AFFRAME_HOME/env/app.env"
+# The tls/origin.* paths pair with deploy/traefik/dynamic/tls.yml.
+jq -er '.ORIGIN_CERT_PEM' <<< "$infra" > "$AFFRAME_HOME/tls/origin.crt.tmp" || die "ORIGIN_CERT_PEM missing in infra"
+jq -er '.ORIGIN_KEY_PEM' <<< "$infra" > "$AFFRAME_HOME/tls/origin.key.tmp" || die "ORIGIN_KEY_PEM missing in infra"
+mv "$AFFRAME_HOME/tls/origin.crt.tmp" "$AFFRAME_HOME/tls/origin.crt"
+mv "$AFFRAME_HOME/tls/origin.key.tmp" "$AFFRAME_HOME/tls/origin.key"
+echo "secrets rendered: $(wc -l < "$AFFRAME_HOME/env/infra.env") infra, $(wc -l < "$AFFRAME_HOME/env/app.env") app"

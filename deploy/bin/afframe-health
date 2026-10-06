@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=deploy/bin/common.sh
+source "$(dirname "$0")/common.sh"
+refuse_root
+
+MAX_DISK_PERCENT="${AFFRAME_MAX_DISK_PERCENT:-85}"
+MIN_MEMORY_PERCENT="${AFFRAME_MIN_MEMORY_PERCENT:-10}"
+MAX_BACKUP_AGE_HOURS="${AFFRAME_MAX_BACKUP_AGE_HOURS:-$RPO_HOURS}"
+problems=()
+
+disk="$(df -P / | awk 'NR == 2 {print $5 + 0}')"
+((disk < MAX_DISK_PERCENT)) || problems+=("disk / at ${disk}%")
+
+memory="$(awk '/^MemTotal:/ {t = $2} /^MemAvailable:/ {a = $2} END {print int(a * 100 / t)}' /proc/meminfo)"
+((memory >= MIN_MEMORY_PERCENT)) || problems+=("only ${memory}% memory available")
+
+containers=("$TRAEFIK" "$POSTGRES")
+for state in "$AFFRAME_HOME"/state/*; do
+  [[ -f "$state" ]] || continue
+  containers+=("$PROJECT-${state##*/}-$(sed -n 's/^colour=//p' "$state")")
+done
+for container in "${containers[@]}"; do
+  status="$(docker inspect -f '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+    "$container" 2> /dev/null || echo missing)"
+  [[ "$status" == "running " || "$status" == "running healthy" ]] || problems+=("$container: $status")
+done
+
+if docker inspect "$POSTGRES" > /dev/null 2>&1; then
+  last="$(docker exec -u postgres "$POSTGRES" pgbackrest info --output=json 2> /dev/null \
+    | jq '.[0].backup[-1].timestamp.stop // 0' 2> /dev/null || echo 0)"
+  age_hours=$((($(date +%s) - last) / 3600))
+  ((age_hours <= MAX_BACKUP_AGE_HOURS)) || problems+=("last backup ${age_hours} h ago")
+
+  sql="select coalesce(last_failed_time > coalesce(last_archived_time, 'epoch'), false) from pg_stat_archiver"
+  archiving="$(psql_exec "$POSTGRES" -Atc "$sql" 2> /dev/null || echo unknown)"
+  [[ "$archiving" == f ]] || problems+=("WAL archiving failing ($archiving)")
+fi
+
+if ((${#problems[@]} == 0)); then
+  echo "ok"
+  heartbeat HEARTBEAT_HEALTH_URL 0
+else
+  printf '%s\n' "${problems[@]}" >&2
+  heartbeat HEARTBEAT_HEALTH_URL 1 "$(printf '%s\n' "${problems[@]}")"
+  exit 1
+fi

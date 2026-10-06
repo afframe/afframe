@@ -1,0 +1,33 @@
+# Usage: copy to apps/<name>/Dockerfile and replace `web` with the package name.
+# Build from the repository root: docker build -f apps/<name>/Dockerfile .
+# The default target is the shipped image. Target `test` runs the checks.
+FROM node:26.10.0-alpine3.24@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS base
+RUN apk upgrade --no-cache
+
+FROM base AS pnpm
+ENV CI=true
+WORKDIR /repo
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+# Node 25+ ships no corepack.
+RUN npm install -g "$(node -p 'require("./package.json").packageManager.split("+")[0]')" && pnpm fetch
+
+FROM pnpm AS build
+COPY . .
+RUN pnpm install --offline --frozen-lockfile --filter "web..." && pnpm --filter "web..." run build
+
+FROM build AS test
+CMD ["sh", "-c", \
+  "pnpm --filter 'web...' run lint && pnpm --filter 'web...' run typecheck && pnpm --filter 'web...' run test"]
+
+# Next.js: use output "standalone" and outputFileTracingRoot at the repository root instead.
+FROM build AS prod
+RUN pnpm --filter web deploy --prod --offline /prod
+
+FROM base
+ENV NODE_ENV=production PORT=3000
+# Next.js: set HOSTNAME=:: so the server listens on IPv4 and IPv6.
+WORKDIR /app
+COPY --from=prod /prod ./
+USER node
+# Exec form and no ENTRYPOINT: the deploy replaces CMD with the words of MIGRATE.
+CMD ["node", "dist/main.js"]

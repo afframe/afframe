@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# shellcheck source=deploy/bin/common.sh
+source "$(dirname "$0")/common.sh"
+refuse_root
+
+name="$PROJECT-restore-drill"
+pgbackrest_env=(
+  --env-file "$AFFRAME_HOME/env/infra.env"
+  -v "$PGBACKREST_VOLUME:/var/lib/pgbackrest:ro"
+  -v "$name:/var/lib/postgresql"
+)
+
+cleanup() {
+  docker rm -f -v "$name" > /dev/null 2>&1 || true
+  docker volume rm "$name" > /dev/null 2>&1 || true
+}
+
+# sentinel <container> <what>: <what> labels the messages.
+sentinel() {
+  local age
+  age="$(psql_exec "$1" -v ON_ERROR_STOP=1 -Atc \
+    "select extract(epoch from now() - max(at))::bigint from ops.heartbeat")" \
+    || { echo "$2: no ops.heartbeat sentinel in the restored database" >&2; return 1; }
+  [[ -n "$age" ]] || { echo "$2: ops.heartbeat is empty" >&2; return 1; }
+  ((age <= RPO_HOURS * 3600)) || {
+    echo "$2: newest data is $((age / 3600)) h old, over the $RPO_HOURS h recovery point target" >&2
+    return 1
+  }
+  log "$2 ok: sentinel $((age / 60)) min old"
+}
+
+drill() {
+  local image i
+  image="$(docker inspect -f '{{.Image}}' "$POSTGRES")" || { echo "$POSTGRES is not there" >&2; return 1; }
+  cleanup
+  log "restore into $name"
+  # Called with `|| code=$?`, so errexit is off in here: every step returns on failure itself.
+  docker run --rm "${pgbackrest_env[@]}" -u postgres "$image" \
+    sh -c 'mkdir -m 700 -p "$PGBACKREST_PG1_PATH" && pgbackrest restore' || return 1
+  # archive_mode off: the drill must never push WAL into the backup repository of the deploy host.
+  docker run -d --name "$name" "${pgbackrest_env[@]}" "$image" \
+    postgres -c archive_mode=off > /dev/null || return 1
+
+  log "wait for recovery to finish"
+  for ((i = 1; i <= 300; i++)); do
+    [[ "$(psql_exec "$name" -Atc 'select pg_is_in_recovery()' 2> /dev/null)" != f ]] || break
+    sleep 1
+  done
+  ((i <= 300)) || { docker logs --tail 50 "$name" >&2; return 1; }
+  sentinel "$name" "pgBackRest restore" || return 1
+}
+
+trap cleanup EXIT
+code=0
+output="$(drill 2>&1)" || code=$?
+echo "$output"
+heartbeat HEARTBEAT_DRILL_URL "$code" "$(tail -n 20 <<< "$output")"
+exit "$code"

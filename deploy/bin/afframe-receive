@@ -1,0 +1,26 @@
+#!/bin/sh
+# stdin: `git archive <git-sha> deploy`.
+# Usage: afframe-receive <git-sha>
+# deploy.yml sends this text as the remote command: it needs only sh and tar, also on an empty host.
+set -eu
+sha="${1:-}"
+case "$sha" in
+  *[!0-9a-f]* | "") echo "afframe-receive: usage: afframe-receive <git-sha>" >&2; exit 2 ;;
+esac
+# Runs before a release exists: the AFFRAME_HOME default of deploy/bin/common.sh, kept here once.
+home="${AFFRAME_HOME:-$HOME/afframe}"
+# Relative paths from here: Actions logs are public, so no error names the absolute host path.
+if ! { mkdir -p "$home" && cd "$home"; } 2> /dev/null; then
+  echo "afframe-receive: cannot enter AFFRAME_HOME" >&2
+  exit 1
+fi
+dir="releases/$sha"
+if [ -d "$dir" ]; then
+  cat > /dev/null
+else
+  rm -rf "$dir.tmp"
+  mkdir -p "$dir.tmp"
+  tar -x -C "$dir.tmp"
+  mv "$dir.tmp" "$dir"
+fi
+echo "release $sha received"

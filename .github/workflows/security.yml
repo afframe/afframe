@@ -1,0 +1,35 @@
+name: Security
+
+on:
+  schedule:
+    - cron: "30 3 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  image-scan:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash # -e and pipefail
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and scan every deployed image
+        run: |
+          mapfile -t images < <(sed -n 's/^ *image: *\([^$ ]*@sha256:[0-9a-f]*\)$/\1/p' deploy/compose.prod.yml)
+          images+=("deploy/postgres=$(docker build -q deploy/postgres)")
+          mapfile -t services < <(find deploy/services -name '*.conf' -exec basename {} .conf \;)
+          if [[ ${#services[@]} -gt 0 ]]; then
+            built="$(bash scripts/ci/build-images.sh "scan-$GITHUB_RUN_ID" "${services[@]}")"
+            mapfile -t -O "${#images[@]}" images <<< "$built"
+          fi
+          bash scripts/ci/image-scan.sh HIGH,CRITICAL "${images[@]}"

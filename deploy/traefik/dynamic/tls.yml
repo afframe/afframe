@@ -1,0 +1,13 @@
+# The origin certificate that vault-env writes: default and listed, so strict SNI matches it.
+tls:
+  certificates:
+    - certFile: /etc/traefik/tls/origin.crt
+      keyFile: /etc/traefik/tls/origin.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/tls/origin.crt
+        keyFile: /etc/traefik/tls/origin.key
+  options:
+    default:
+      sniStrict: true
