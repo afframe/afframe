@@ -186,7 +186,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 - `afframe-deploy` refuses a service name that has a file in `deploy/traefik/dynamic/`, because route files share that folder.
 - Host jobs refuse to run as root. A host drop-in sets the systemd user, and `$INTERNAL` documents it.
 - Some values repeat with a pointer comment and a test. Change every copy of the confirm port, the `afframe.tree` label, the root build inputs and the `AFFRAME_HOME` default.
-- `AFFRAME_HOME` holds the releases, `current`, the rendered env, TLS, state and the Traefik config. Nothing mounts from a release.
+- `AFFRAME_HOME` holds the releases, `current`, the rendered env, TLS, state, the Traefik config and the Docker CLI config of the host commands. Nothing mounts from a release.
 - `log/` in `AFFRAME_HOME` holds the output of infrastructure updates, migrations and failed health checks.
 - The host keeps the current and the previous release, and the current and the previous image of each service.
 
