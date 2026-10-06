@@ -11,7 +11,6 @@ export AFFRAME_HOME="$work/home" FAKE="$work/fake" VAULT_ADDR=http://vault.test 
   AFFRAME_VAULT_KV_PREFIX=kv/data/test
 mkdir -p "$FAKE/bin"
 
-# Records its arguments and stdin; answers like Vault KV v2 for infra and app.
 cat > "$FAKE/bin/curl" <<'FAKECURL'
 #!/usr/bin/env bash
 echo "$*" >> "$FAKE/args"
