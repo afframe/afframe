@@ -51,6 +51,8 @@ check_compose() {
   jq -e '.networks as $n | any(.services.postgres.networks | keys[]; $n[.].internal != true)' \
     > /dev/null <<< "$prod_config" \
     || { echo "postgres needs a network that is not internal, to reach the backup repository" >&2; rc=1; }
+  jq -e '(.services.postgres.ports // []) == [] and .networks.db.internal == true' > /dev/null <<< "$prod_config" \
+    || { echo "postgres must publish no ports, and the network db must stay internal" >&2; rc=1; }
   if [[ -f compose.ci.yml ]]; then docker-compose -f compose.ci.yml config -q || rc=1; fi
   DB_PORT=1 docker-compose -f compose.dev.yml config --format json \
     | jq -e --argjson prod "$(jq -c '[.volumes[]?.name]' <<< "$prod_config")" \
