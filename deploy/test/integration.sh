@@ -85,7 +85,7 @@ serves() {
   [[ "$(curl -sk -o /dev/null -w '%{http_code}' --resolve "$HOST:$AFFRAME_HTTPS_PORT:127.0.0.1" \
     "https://$HOST:$AFFRAME_HTTPS_PORT/health")" == 200 ]]
 }
-# ship <git-sha> <run> [fixture]: like deploy.yml. A release without fixture.conf retires it.
+# ship <git-sha> <run> [<service>]: like deploy.yml.
 ship() {
   local sha="$1" run="$2" images=/dev/null
   shift 2
@@ -151,7 +151,7 @@ build "$s3" tree3 "$root/deploy/test/images/broken" & pid3=$!
 build "$s5" tree2 "$root/deploy/test/images/fixture" & pid5=$!
 wait "$pid1" && wait "$pid2" && wait "$pid3" && wait "$pid5"
 id1="$(cat "$work/$s1.id")" id2="$(cat "$work/$s2.id")" id5="$(cat "$work/$s5.id")"
-until curl -fs "$VAULT_ADDR/v1/sys/health" > /dev/null; do sleep 1; done
+curl -fsS --retry 30 --retry-all-errors --retry-delay 1 "$VAULT_ADDR/v1/sys/health" > /dev/null
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$HOST" \
   -addext "subjectAltName=DNS:$HOST,DNS:*.$HOST" -keyout "$work/origin.key" -out "$work/origin.crt" 2> /dev/null
