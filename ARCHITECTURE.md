@@ -73,6 +73,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 1. Wait until no Deploy run is in progress. Note the value of `DEPLOY_ENABLED`. Then stop the deploys and the host jobs:
 
    ```sh
+   gh variable get DEPLOY_ENABLED --repo afframe/afframe
    gh variable set DEPLOY_ENABLED --body false --repo afframe/afframe
    sudo systemctl stop afframe-backup.timer afframe-health.timer afframe-restore-drill.timer
    ```
@@ -99,7 +100,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
      --delta --type=time --target-action=promote --target='2026-10-06 09:30:00+00'
    ```
 
-5. Start Postgres and wait until the recovery ends. `docker logs afframe-postgres` shows the progress.
+5. Start Postgres and wait until the recovery ends. `docker logs afframe-postgres` shows the progress. If the loop does not end, stop it and read the log.
 
    ```sh
    docker start afframe-postgres
