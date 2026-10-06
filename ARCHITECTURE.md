@@ -49,7 +49,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 1. A push to `main` runs `.github/workflows/deploy.yml`. A push that changes only `**.md` or `docs/**` files does not deploy. This includes Markdown files in `apps/`.
 2. The job runs only when the repository variable `DEPLOY_ENABLED` is `true`.
 3. The job stops unless the commit is the merge commit of a PR into the default branch.
-4. It joins the tailnet with OIDC and ships the release and the tested images as the Decision in `docs/adr/0001-registry-free-deploy.md` states. `afframe-receive` unpacks the release.
+4. It joins the tailnet with OIDC and ships the release and the tested images as the Decision in `docs/adr/0001-images-streamed-to-deploy-host.md` states. `afframe-receive` unpacks the release.
 5. `afframe-deploy` refuses a run number lower than the deployed one. It renders the credentials and starts Traefik and Postgres when their inputs changed.
 6. For each changed service, it runs `MIGRATE` in the new image, starts the idle colour and waits for consecutive `/health` passes.
 7. It removes the services whose manifest is gone, switches Traefik, confirms the switch through Traefik and stops the old colours.
@@ -65,18 +65,25 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 ### 6.3 Restore the database
 
 - Run the host commands on the deploy host as the user of the host jobs. `$INTERNAL/afframe-deploy.md` describes the host.
-- Export `AFFRAME_HOME` in the shell with the value that the host jobs use.
+- Export `AFFRAME_HOME` with the default in `deploy/bin/common.sh`. `deploy/host/systemd/afframe@.service` uses that path.
 - Run the `gh` commands on a workstation.
-- `deploy/test/integration.sh` runs the first procedure on its test stack.
+- `deploy/test/integration.sh` runs steps 2 to 5 and 7 of the first procedure on its test stack, with a local backup repository.
 
 #### Restore the running host to a point in time
 
-1. Wait until no Deploy run is in progress. Note the value of `DEPLOY_ENABLED`. Then stop the deploys and the host jobs:
+1. Note the value of `DEPLOY_ENABLED` and stop the deploys. Wait until `gh run list` shows no queued or running Deploy run:
 
    ```sh
    gh variable get DEPLOY_ENABLED --repo afframe/afframe
    gh variable set DEPLOY_ENABLED --body false --repo afframe/afframe
+   gh run list --workflow deploy.yml --repo afframe/afframe --limit 5
+   ```
+
+   Then, on the host, stop the host jobs and wait until no host job is active:
+
+   ```sh
    sudo systemctl stop afframe-backup.timer afframe-health.timer afframe-restore-drill.timer
+   while systemctl list-units --no-legend --state=active,activating 'afframe@*.service' | grep -q .; do sleep 5; done
    ```
 
 2. Archive the current WAL and list the backups. The target time must be after the end of the oldest backup.
@@ -86,30 +93,39 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
    docker exec afframe-postgres pgbackrest info
    ```
 
-3. Stop Postgres. The services get database errors until step 5 ends. A shorter timeout can kill Postgres, and the restore then refuses the data.
+3. Stop Postgres. The services get database errors until step 5 ends. A shorter timeout can kill Postgres. A killed Postgres leaves `postmaster.pid`, and pgBackRest refuses to restore. Then start Postgres, wait for it, and stop it again with the timeout.
 
    ```sh
    docker stop --time 120 afframe-postgres
    ```
 
-4. Restore to the target time. Give the time with its UTC offset. pgBackRest selects the newest backup before the target.
+4. Restore to the target time. Give the time with its UTC offset. pgBackRest selects the newest backup before the target. Postgres pauses at the target.
 
    ```sh
    docker run --rm --env-file "$AFFRAME_HOME/env/infra.env" \
      -v afframe-postgres-data:/var/lib/postgresql -v afframe-pgbackrest:/var/lib/pgbackrest \
      afframe-postgres:local sh -c 'mkdir -m 700 -p "$PGBACKREST_PG1_PATH" && exec pgbackrest restore "$@"' sh \
-     --delta --type=time --target-action=promote --target='2026-10-06 09:30:00+00'
+     --delta --type=time --target-action=pause --target='2026-10-06 09:30:00+00'
    ```
 
-5. Start Postgres and wait until the recovery ends. `docker logs afframe-postgres` shows the progress. If the loop does not end, stop it and read the log.
+5. Start Postgres and wait until it pauses at the target. `docker logs afframe-postgres` shows the progress. If the loop does not end, stop it and read the log.
 
    ```sh
    docker start afframe-postgres
+   until [ "$(docker exec afframe-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select pg_get_wal_replay_pause_state()"' 2> /dev/null)" = paused ]; do sleep 5; done
+   ```
+
+   Examine the data with `psql`. Postgres is read-only while it pauses. If the target is wrong, do steps 3 to 5 again with another target. This makes no new timeline.
+
+   If the data is correct, end the recovery. Then wait until Postgres accepts writes:
+
+   ```sh
+   docker exec afframe-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select pg_wal_replay_resume()"'
    until [ "$(docker exec afframe-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select pg_is_in_recovery()"' 2> /dev/null)" = f ]; do sleep 5; done
    ```
 
 6. If Postgres stops with "recovery ended before configured recovery target was reached", the archive has no WAL after the target. Do steps 3 to 5 again with an earlier target.
-7. Examine the data. Then take a full backup on the new timeline:
+7. Take a full backup on the new timeline:
 
    ```sh
    "$AFFRAME_HOME/current/deploy/bin/afframe-backup" full
@@ -122,11 +138,13 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
    gh variable set DEPLOY_ENABLED --body '<value from step 1>' --repo afframe/afframe
    ```
 
+   If a Deploy run after the target time ran a migration, the code expects a newer schema. Roll that service back as section 6.2 states, or run its `MIGRATE` again.
+
 #### Restore onto a rebuilt host
 
 The first release starts Postgres and creates the stanza. `stanza-create` needs a primary, and it must find the restored database. Thus the restore runs before the first deploy, and the recovery ends before it.
 
-1. Do the host setup in `$INTERNAL/afframe-deploy.md`. Do not run a deploy. If the host setup started the timers, stop them as in step 1 of the first procedure.
+1. Make sure that Postgres on the old host is stopped. Do the host setup in `$INTERNAL/afframe-deploy.md`. Do not run a deploy. Turn off the deploys as in step 1 of the first procedure.
 2. Copy the `deploy/` folder of `main` to the host. On a workstation, in a checkout of `main`:
 
    ```sh
@@ -140,10 +158,16 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
    docker compose -p afframe -f ~/afframe-restore/deploy/compose.prod.yml up --no-start --build postgres
    ```
 
-4. Do step 4 of the first procedure without the options `--type`, `--target` and `--target-action`. pgBackRest then restores the newest backup and all archived WAL.
-5. Do step 5 of the first procedure.
+4. Do step 4 of the first procedure without the options `--delta`, `--type`, `--target` and `--target-action`. pgBackRest then restores the newest backup and all archived WAL.
+5. Start Postgres and wait until the recovery ends. Postgres does not pause, because the restore has no target.
+
+   ```sh
+   docker start afframe-postgres
+   until [ "$(docker exec afframe-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select pg_is_in_recovery()"' 2> /dev/null)" = f ]; do sleep 5; done
+   ```
+
 6. Turn on the deploys and run the Deploy workflow. The first release takes over the restored Postgres, and `stanza-create` accepts it.
-7. Take a full backup and start the timers, as in steps 7 and 8 of the first procedure.
+7. Take a full backup as in step 7 of the first procedure. Start the timers with the `systemctl` command of step 8.
 
 ### 6.4 Facts that prevent wrong changes
 
@@ -164,7 +188,6 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 
 - `ci` runs the deploy integration test only when deploy files changed.
 - `ci` builds and tests every app when `packages/` or a root workspace file changed.
-- `docs/adr/0001-registry-free-deploy.md` records why CI uses no registry.
 - `.github/workflows/security.yml` scans the pinned Traefik image and fresh builds of the Postgres image and each deployable service on a schedule.
 - `.github/rulesets/main.json` requires PRs, the checks `ci` and `pr-title`, squash merge, linear history and signed commits. `scripts/ci/rulesets.sh` compares them with GitHub or applies them. A merge does not apply them. The squash commit title setting stays `PR_TITLE`, because the `pr-title` check validates the PR title.
 - `.github/rulesets/tags.json` protects `v*` tags from deletion and force-push, and requires linear history and signed commits.
