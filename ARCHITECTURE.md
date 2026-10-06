@@ -64,14 +64,15 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 
 ### 6.3 Restore the database
 
-- Run the host commands on the deploy host as the user of the host jobs. `$INTERNAL/afframe-deploy.md` describes the host.
+- Run the `systemctl stop` and `systemctl start` commands on the deploy host as root. Root installs and controls the timers.
+- Run the other host commands on the deploy host as the user of the host jobs. `$INTERNAL/afframe-deploy.md` describes the host.
 - Export `AFFRAME_HOME` with the default in `deploy/bin/common.sh`. `deploy/host/systemd/afframe@.service` uses that path.
 - Run the `gh` commands on a workstation.
 - `deploy/test/integration.sh` runs steps 2 to 5 and 7 of the first procedure on its test stack, with a local backup repository.
 
 #### Restore the running host to a point in time
 
-1. Note the value of `DEPLOY_ENABLED` and stop the deploys. Wait until `gh run list` shows no queued or running Deploy run:
+1. Note the value of `DEPLOY_ENABLED` and stop the deploys. `gh variable get` fails when the variable is unset. Unset is a valid value to note. Wait until `gh run list` shows no queued or running Deploy run:
 
    ```sh
    gh variable get DEPLOY_ENABLED --repo afframe/afframe
@@ -82,7 +83,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
    Then, on the host, stop the host jobs and wait until no host job is active:
 
    ```sh
-   sudo systemctl stop afframe-backup.timer afframe-health.timer afframe-restore-drill.timer
+   systemctl stop afframe-backup.timer afframe-health.timer afframe-restore-drill.timer
    while systemctl list-units --no-legend --state=active,activating 'afframe@*.service' | grep -q .; do sleep 5; done
    ```
 
@@ -124,17 +125,17 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
    until [ "$(docker exec afframe-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select pg_is_in_recovery()"' 2> /dev/null)" = f ]; do sleep 5; done
    ```
 
-6. If Postgres stops with "recovery ended before configured recovery target was reached", the archive has no WAL after the target. Do steps 3 to 5 again with an earlier target.
+6. If the log shows "recovery ended before configured recovery target was reached", the archive has no WAL after the target. Postgres then exits, and Docker restarts it in a loop. The loop of step 5 does not end. Do steps 3 to 5 again with an earlier target.
 7. Take a full backup on the new timeline:
 
    ```sh
    "$AFFRAME_HOME/current/deploy/bin/afframe-backup" full
    ```
 
-8. Start the host jobs. Set `DEPLOY_ENABLED` to the value from step 1:
+8. Start the host jobs. Set `DEPLOY_ENABLED` to the value from step 1. If the variable was unset in step 1, delete it with `gh variable delete DEPLOY_ENABLED --repo afframe/afframe` instead.
 
    ```sh
-   sudo systemctl start afframe-backup.timer afframe-health.timer afframe-restore-drill.timer
+   systemctl start afframe-backup.timer afframe-health.timer afframe-restore-drill.timer
    gh variable set DEPLOY_ENABLED --body '<value from step 1>' --repo afframe/afframe
    ```
 
@@ -168,6 +169,11 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 
 6. Turn on the deploys and run the Deploy workflow. The first release takes over the restored Postgres, and `stanza-create` accepts it.
 7. Take a full backup as in step 7 of the first procedure. Start the timers with the `systemctl` command of step 8.
+8. Remove the working copy from step 2:
+
+   ```sh
+   rm -rf ~/afframe-restore
+   ```
 
 ### 6.4 Facts that prevent wrong changes
 
@@ -226,6 +232,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 ## 9. Known Limits
 
 - Detection limits of the image scans: `$INTERNAL/security-limits.md`.
+- No test runs the restore onto a rebuilt host. `deploy/test/integration.sh` runs only the restore of the running host.
 
 ## 10. Project Identification
 
