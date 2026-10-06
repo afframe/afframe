@@ -31,12 +31,8 @@ read_vars() {
   local file="$1" key value name
   shift
   [[ -f "$file" ]] || return 0
-  # A relative name: Actions logs are public. return, not die: $(...) callers run without set -e.
-  if [[ ! -r "$file" ]]; then
-    file="${file#"$REPO/"}"
-    echo "${0##*/}: cannot read ${file#"$AFFRAME_HOME/"}" >&2
-    return 1
-  fi
+  # A relative name: Actions logs are public.
+  [[ -r "$file" ]] || { file="${file#"$REPO/"}"; die "cannot read ${file#"$AFFRAME_HOME/"}"; }
   while IFS='=' read -r key value; do
     for name in "$@"; do
       [[ "$key" == "$name" ]] && printf -v "$name" '%s' "$value"
