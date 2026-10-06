@@ -102,6 +102,22 @@ drill_fails() {
   if output="$("$current/afframe-restore-drill" 2>&1)"; then return 1; fi
   grep -qF -- "$1" <<< "$output" || { echo "$output" | tail -n 5; return 1; }
 }
+# restore <pgbackrest restore option>...: step 4 of ARCHITECTURE.md section 6.3.
+restore() {
+  # shellcheck disable=SC2016 # expanded by the container's shell
+  docker run --rm --env-file "$AFFRAME_HOME/env/infra.env" -v afframe-postgres-data:/var/lib/postgresql \
+    -v "$PGBACKREST_VOLUME:/var/lib/pgbackrest" "$POSTGRES:local" \
+    sh -c 'mkdir -m 700 -p "$PGBACKREST_PG1_PATH" && exec pgbackrest restore "$@"' sh "$@"
+}
+recovered() {
+  local i
+  for ((i = 1; i <= 120; i++)); do
+    [[ "$(psql_prod 'select pg_is_in_recovery()' 2> /dev/null)" != f ]] || return 0
+    sleep 1
+  done
+  docker logs --tail 20 "$POSTGRES"
+  return 1
+}
 releases() { find "$AFFRAME_HOME/releases" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | tr '\n' ' '; }
 
 # public_response <path>: with SNI HOST.
@@ -207,6 +223,24 @@ check "restore drill" "$current/afframe-restore-drill"
 psql_prod "update ops.heartbeat set at = now() - interval '30 hours'" > /dev/null
 check "stale data archived" docker exec -u postgres "$POSTGRES" pgbackrest check
 check "drill refuses stale data" drill_fails "pgBackRest restore: newest data is 30 h old"
+
+echo "== restore to a point in time (ARCHITECTURE.md section 6.3)"
+psql_prod "insert into drill values (44)" > /dev/null
+check "backup before the target" "$current/afframe-backup" diff
+sleep 1
+target="$(psql_prod "select now()")"
+sleep 1
+psql_prod "insert into drill values (45)" > /dev/null
+check "WAL after the target archived" docker exec "$POSTGRES" pgbackrest check
+check "postgres stopped" docker stop --time 120 "$POSTGRES"
+check "restored to the target" restore --delta --type=time --target-action=promote "--target=$target"
+check "postgres started" docker start "$POSTGRES"
+check "recovery ended" recovered
+check "rows up to the target only" \
+  test "$(psql_prod "select string_agg(x::text, ' ' order by x) from drill")" == "42 43 44"
+check "stanza-create accepts the restored database" docker exec "$POSTGRES" pgbackrest stanza-create
+check "full backup after the restore" "$current/afframe-backup" full
+check "restore drill after the restore" "$current/afframe-restore-drill"
 
 if ((failures > 0)); then
   echo "${failures} integration check(s) failed"
