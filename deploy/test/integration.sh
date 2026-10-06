@@ -109,15 +109,6 @@ restore() {
     -v "$PGBACKREST_VOLUME:/var/lib/pgbackrest" "$POSTGRES:local" \
     sh -c 'mkdir -m 700 -p "$PGBACKREST_PG1_PATH" && exec pgbackrest restore "$@"' sh "$@"
 }
-recovered() {
-  local i
-  for ((i = 1; i <= 120; i++)); do
-    [[ "$(psql_prod 'select pg_is_in_recovery()' 2> /dev/null)" != f ]] || return 0
-    sleep 1
-  done
-  docker logs --tail 20 "$POSTGRES"
-  return 1
-}
 releases() { find "$AFFRAME_HOME/releases" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | tr '\n' ' '; }
 
 # public_response <path>: with SNI HOST.
@@ -235,7 +226,7 @@ check "WAL after the target archived" docker exec "$POSTGRES" pgbackrest check
 check "postgres stopped" docker stop --time 120 "$POSTGRES"
 check "restored to the target" restore --delta --type=time --target-action=promote "--target=$target"
 check "postgres started" docker start "$POSTGRES"
-check "recovery ended" recovered
+check "recovery ended" wait_recovered "$POSTGRES" 120
 check "rows up to the target only" \
   test "$(psql_prod "select string_agg(x::text, ' ' order by x) from drill")" == "42 43 44"
 check "stanza-create accepts the restored database" docker exec "$POSTGRES" pgbackrest stanza-create

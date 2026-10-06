@@ -48,6 +48,18 @@ psql_exec() {
   docker exec "$container" sh -c 'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"' psql "$@"
 }
 
+# wait_recovered <container> <seconds>: fails with the log tail while Postgres is still in recovery.
+wait_recovered() {
+  local i
+  for ((i = 0; i < $2; i++)); do
+    [[ "$(psql_exec "$1" -Atc 'select pg_is_in_recovery()' 2> /dev/null)" != f ]] || return 0
+    sleep 1
+  done
+  docker logs --tail 20 "$1" >&2
+  echo "$1: still in recovery after $2 s" >&2
+  return 1
+}
+
 # heartbeat <KEY> <exit code> [message]: ALERT_URL as well on a failure.
 heartbeat() {
   local url alert
