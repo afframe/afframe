@@ -402,7 +402,7 @@ check "it switches" test "$(state held current)" == "$(img held 1)"
 check "its route points at it" grep -q "afframe-held-$(state held colour):8080" <<< "$(route held)"
 rm "$release/deploy/services/held.conf"
 check "deploy that retires it" dep
-check "its state removed" test ! -e "$AFFRAME_HOME/state/held"
+check "the state of held removed" test ! -e "$AFFRAME_HOME/state/held"
 
 echo A=2 > "$FAKE/infra.env"
 check "deploy after an infra secret change" dep
