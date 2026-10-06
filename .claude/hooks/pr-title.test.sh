@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -uo pipefail
+command -v jq > /dev/null || { echo "skip: needs jq"; exit 77; }
 
 hook="$(dirname "$0")/pr-title.sh"
 failures=0

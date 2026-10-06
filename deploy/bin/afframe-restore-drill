@@ -31,7 +31,7 @@ sentinel() {
 }
 
 drill() {
-  local image i
+  local image
   image="$(docker inspect -f '{{.Image}}' "$POSTGRES")" || { echo "$POSTGRES is not there" >&2; return 1; }
   cleanup
   log "restore into $name"
@@ -43,11 +43,7 @@ drill() {
     postgres -c archive_mode=off > /dev/null || return 1
 
   log "wait for recovery to finish"
-  for ((i = 1; i <= 300; i++)); do
-    [[ "$(psql_exec "$name" -Atc 'select pg_is_in_recovery()' 2> /dev/null)" != f ]] || break
-    sleep 1
-  done
-  ((i <= 300)) || { docker logs --tail 50 "$name" >&2; return 1; }
+  wait_recovered "$name" 300 || return 1
   sentinel "$name" "pgBackRest restore" || return 1
 }
 

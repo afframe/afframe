@@ -12,8 +12,14 @@ if [[ -z "$type" ]]; then
 fi
 [[ "$type" == full || "$type" == diff ]] || die "usage: afframe-backup [full|diff]"
 
-# Before the backup, so the backup carries a fresh sentinel for afframe-restore-drill.
-write_sentinel
+# Before the backup, so the backup carries a fresh sentinel for afframe-restore-drill. Only warns.
+log "heartbeat sentinel"
+psql_exec "$POSTGRES" -q -v ON_ERROR_STOP=1 -c "
+  set client_min_messages = warning;
+  create schema if not exists ops;
+  create table if not exists ops.heartbeat (id int primary key, at timestamptz not null);
+  insert into ops.heartbeat values (1, now()) on conflict (id) do update set at = excluded.at" \
+  || echo "warning: ops.heartbeat sentinel not written; the restore drill will report stale data" >&2
 code=0
 output="$(docker exec -u postgres "$POSTGRES" pgbackrest --type="$type" backup 2>&1)" || code=$?
 echo "$output"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Fake `curl` on PATH: no Vault needed.
 set -uo pipefail
+command -v jq > /dev/null || { echo "skip: needs jq"; exit 77; }
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d)"
@@ -10,13 +11,12 @@ export AFFRAME_HOME="$work/home" FAKE="$work/fake" VAULT_ADDR=http://vault.test 
   AFFRAME_VAULT_KV_PREFIX=kv/data/test
 mkdir -p "$FAKE/bin"
 
-# Records its arguments and stdin; answers like Vault KV v2 for infra and app.
 cat > "$FAKE/bin/curl" <<'FAKECURL'
 #!/usr/bin/env bash
 echo "$*" >> "$FAKE/args"
 cat >> "$FAKE/stdin"
 case "${*: -1}" in
-  */infra) echo '{"data": {"data": {"POSTGRES_PASSWORD": "pw", "ORIGIN_CERT_PEM": "cert", "ORIGIN_KEY_PEM": "key"}}}' ;;
+  */infra) echo '{"data": {"data": {"SAMPLE_KEY": "pw", "ORIGIN_CERT_PEM": "cert", "ORIGIN_KEY_PEM": "key"}}}' ;;
   */app) echo '{"data": {"data": {"GREETING": "hello"}}}' ;;
   *) exit 22 ;;
 esac
@@ -36,7 +36,7 @@ render() { PATH="$FAKE/bin:$PATH" "$root/deploy/bin/vault-env" < /dev/null > /de
 check "renders the secrets" render
 check "token not on curl's command line" fails grep -q tok-secret-123 "$FAKE/args"
 check "token header on stdin" test "$(grep -c '^X-Vault-Token: tok-secret-123$' "$FAKE/stdin")" -eq 2
-check "infra env" grep -qx POSTGRES_PASSWORD=pw "$AFFRAME_HOME/env/infra.env"
+check "infra env" grep -qx SAMPLE_KEY=pw "$AFFRAME_HOME/env/infra.env"
 check "app env" grep -qx GREETING=hello "$AFFRAME_HOME/env/app.env"
 check "origin key" grep -qx key "$AFFRAME_HOME/tls/origin.key"
 check "KV path from AFFRAME_VAULT_KV_PREFIX" grep -q " http://vault.test/v1/kv/data/test/app$" "$FAKE/args"

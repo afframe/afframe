@@ -30,7 +30,8 @@ if [[ -z "${AFFRAME_TOOLBOX:-}" ]]; then
 fi
 
 check_actionlint() {
-  actionlint -color -config-file scripts/ci/actionlint.yaml
+  # actionlint does not know the ubuntu-26.04 runner label yet.
+  actionlint -color -ignore 'label "ubuntu-26.04" is unknown'
 }
 
 check_zizmor() {
@@ -47,6 +48,11 @@ check_compose() {
   jq -e '.services.postgres.volumes[]
       | select(.source == "postgres-data" and .target == "/var/lib/postgresql")' > /dev/null <<< "$prod_config" \
     || { echo "postgres must keep its data in the postgres-data volume" >&2; rc=1; }
+  jq -e '.networks as $n | any(.services.postgres.networks | keys[]; $n[.].internal != true)' \
+    > /dev/null <<< "$prod_config" \
+    || { echo "postgres needs a network that is not internal, to reach the backup repository" >&2; rc=1; }
+  jq -e '(.services.postgres.ports // []) == [] and .networks.db.internal == true' > /dev/null <<< "$prod_config" \
+    || { echo "postgres must publish no ports, and the network db must stay internal" >&2; rc=1; }
   if [[ -f compose.ci.yml ]]; then docker-compose -f compose.ci.yml config -q || rc=1; fi
   DB_PORT=1 docker-compose -f compose.dev.yml config --format json \
     | jq -e --argjson prod "$(jq -c '[.volumes[]?.name]' <<< "$prod_config")" \
@@ -71,7 +77,16 @@ check_gitleaks() {
   fi
 }
 
-checks=(actionlint zizmor compose shellcheck gitleaks)
+# Markdown has no hard wraps and lockfiles are generated. A pin line (`@` and a SHA) may be longer.
+check_line_length() {
+  git ls-files -z '*.sh' 'deploy/bin/*' '*.yml' '*.yaml' '*Dockerfile*' ':!:*-lock.yaml' \
+    | xargs -0 awk '/@(sha256:)?[0-9a-f]{40}/ {next}
+      {max = /^[[:space:]]*#/ ? 100 : 120}
+      length > max {printf "%s:%d: %d columns, at most %d\n", FILENAME, FNR, length, max; bad = 1}
+      END {exit bad}'
+}
+
+checks=(actionlint zizmor compose shellcheck gitleaks line_length)
 
 logs="$(mktemp -d)"
 trap 'rm -rf "$logs"' EXIT

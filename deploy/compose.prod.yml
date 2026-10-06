@@ -31,6 +31,8 @@ services:
     restart: unless-stopped
     mem_limit: 2g
     shm_size: 256m
+    # ARCHITECTURE.md 6.3 step 3 and deploy/test/integration.sh stop Postgres with the same timeout.
+    stop_grace_period: 120s
     # Rendered by deploy/bin/vault-env.
     env_file:
       - path: ${AFFRAME_HOME:?}/env/infra.env
@@ -50,7 +52,8 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
       - pgbackrest:/var/lib/pgbackrest
-    networks: [db]
+    # egress: archive_command and afframe-backup reach the remote backup repository.
+    networks: [db, egress]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
@@ -72,3 +75,5 @@ networks:
   db:
     name: ${COMPOSE_PROJECT_NAME:?}-db
     internal: true
+  egress:
+    name: ${COMPOSE_PROJECT_NAME:?}-egress

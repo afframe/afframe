@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Usage: vault-env
 # Inputs VAULT_ADDR, AFFRAME_VAULT_KV_PREFIX, VAULT_TOKEN: environment or AFFRAME_HOME files
 set -euo pipefail
 # shellcheck source=deploy/bin/common.sh

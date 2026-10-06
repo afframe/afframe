@@ -85,7 +85,7 @@ serves() {
   [[ "$(curl -sk -o /dev/null -w '%{http_code}' --resolve "$HOST:$AFFRAME_HTTPS_PORT:127.0.0.1" \
     "https://$HOST:$AFFRAME_HTTPS_PORT/health")" == 200 ]]
 }
-# ship <git-sha> <run> [fixture]: like deploy.yml. A release without fixture.conf retires it.
+# ship <git-sha> <run> [<service>]: like deploy.yml.
 ship() {
   local sha="$1" run="$2" images=/dev/null
   shift 2
@@ -101,6 +101,23 @@ drill_fails() {
   local output
   if output="$("$current/afframe-restore-drill" 2>&1)"; then return 1; fi
   grep -qF -- "$1" <<< "$output" || { echo "$output" | tail -n 5; return 1; }
+}
+# restore <pgbackrest restore option>...: step 4 of ARCHITECTURE.md section 6.3.
+restore() {
+  # shellcheck disable=SC2016 # expanded by the container's shell
+  docker run --rm --env-file "$AFFRAME_HOME/env/infra.env" -v afframe-postgres-data:/var/lib/postgresql \
+    -v "$PGBACKREST_VOLUME:/var/lib/pgbackrest" "$POSTGRES:local" \
+    sh -c 'mkdir -m 700 -p "$PGBACKREST_PG1_PATH" && exec pgbackrest restore "$@"' sh "$@"
+}
+# wait_paused <seconds>: step 5 of ARCHITECTURE.md section 6.3, until Postgres pauses at the target.
+wait_paused() {
+  local i
+  for ((i = 0; i < $1; i++)); do
+    [[ "$(psql_prod 'select pg_get_wal_replay_pause_state()' 2> /dev/null)" != paused ]] || return 0
+    sleep 1
+  done
+  docker logs --tail 20 "$POSTGRES" >&2
+  return 1
 }
 releases() { find "$AFFRAME_HOME/releases" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort | tr '\n' ' '; }
 
@@ -144,7 +161,7 @@ build "$s3" tree3 "$root/deploy/test/images/broken" & pid3=$!
 build "$s5" tree2 "$root/deploy/test/images/fixture" & pid5=$!
 wait "$pid1" && wait "$pid2" && wait "$pid3" && wait "$pid5"
 id1="$(cat "$work/$s1.id")" id2="$(cat "$work/$s2.id")" id5="$(cat "$work/$s5.id")"
-until curl -fs "$VAULT_ADDR/v1/sys/health" > /dev/null; do sleep 1; done
+curl -fsS --retry 30 --retry-all-errors --retry-delay 1 "$VAULT_ADDR/v1/sys/health" > /dev/null
 
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$HOST" \
   -addext "subjectAltName=DNS:$HOST,DNS:*.$HOST" -keyout "$work/origin.key" -out "$work/origin.crt" 2> /dev/null
@@ -207,6 +224,29 @@ check "restore drill" "$current/afframe-restore-drill"
 psql_prod "update ops.heartbeat set at = now() - interval '30 hours'" > /dev/null
 check "stale data archived" docker exec -u postgres "$POSTGRES" pgbackrest check
 check "drill refuses stale data" drill_fails "pgBackRest restore: newest data is 30 h old"
+
+echo "== restore to a point in time (ARCHITECTURE.md section 6.3)"
+psql_prod "insert into drill values (44)" > /dev/null
+check "backup before the target" "$current/afframe-backup" diff
+sleep 1
+target="$(psql_prod "select now()")"
+sleep 1
+psql_prod "insert into drill values (45)" > /dev/null
+check "WAL after the target archived" docker exec "$POSTGRES" pgbackrest check
+check "postgres stopped" docker stop --time 120 "$POSTGRES"
+check "restored to the target" restore --delta --type=time --target-action=pause "--target=$target"
+check "postgres started" docker start "$POSTGRES"
+check "paused at the target" wait_paused 120
+check "rows up to the target only, while paused" \
+  test "$(psql_prod "select string_agg(x::text, ' ' order by x) from drill")" == "42 43 44"
+check "read-only while paused" fails psql_prod "insert into drill values (46)"
+check "resumed" psql_prod "select pg_wal_replay_resume()"
+check "recovery ended" wait_recovered "$POSTGRES" 120
+check "rows up to the target only, after the recovery" \
+  test "$(psql_prod "select string_agg(x::text, ' ' order by x) from drill")" == "42 43 44"
+check "stanza-create accepts the restored database" docker exec "$POSTGRES" pgbackrest stanza-create
+check "full backup after the restore" "$current/afframe-backup" full
+check "restore drill after the restore" "$current/afframe-restore-drill"
 
 if ((failures > 0)); then
   echo "${failures} integration check(s) failed"

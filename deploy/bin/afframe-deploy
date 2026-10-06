@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Usage: afframe-deploy deploy <git-sha> <run-number> [<service>...] | rollback <service>
 # deploy reads `docker save` of the images on stdin. deploy.yml runs it from the new release.
+# Output never names an absolute host path, also in shell or tool errors: Actions logs are public.
 set -euo pipefail
 # shellcheck source=deploy/bin/common.sh
 source "$(dirname "$0")/common.sh"
@@ -9,12 +10,12 @@ HEALTH_TRIES="${AFFRAME_HEALTH_TRIES:-60}"
 HEALTH_PASSES="${AFFRAME_HEALTH_PASSES:-3}"
 MIGRATE_TIMEOUT="${AFFRAME_MIGRATE_TIMEOUT:-300}"
 MIGRATE_KILL_AFTER="${AFFRAME_MIGRATE_KILL_AFTER:-10}" # seconds after TERM
-SWITCH_TIMEOUT="${AFFRAME_SWITCH_TIMEOUT:-15}"         # about seconds: one Traefik probe a second
+SWITCH_TIMEOUT="${AFFRAME_SWITCH_TIMEOUT:-15}"         # rounds of probes, one a second
 STOP_GRACE=30
 export AFFRAME_HOME
 
-# pending: new colours removed on exit. live: live colour per service (- for none). retired: old
-# colours to stop. switched: "<service> <host> <name>". undo_dir: saved routes and states.
+# pending: new colours removed on exit. live: the live colour per service, - for none.
+# switched: "<service> <host> <name>".
 pending=()
 live=()
 retired=()
@@ -31,8 +32,6 @@ cleanup() {
   [[ -z "$undo_dir" ]] || rm -rf "$undo_dir"
 }
 
-# Failures name paths relative to AFFRAME_HOME, never the shell's or a tool's message: Actions logs
-# are public and those messages hold the absolute host path.
 lock() {
   mkdir -p "$AFFRAME_HOME" 2> /dev/null || die "cannot create AFFRAME_HOME"
   { exec 9> "$AFFRAME_HOME/deploy.lock"; } 2> /dev/null || die "cannot open deploy.lock"
@@ -41,13 +40,10 @@ lock() {
 
 # write_file <file in AFFRAME_HOME>: atomic, so Traefik's watcher never sees half a file.
 write_file() {
-  local status=0
-  { cat > "$1.tmp" && mv "$1.tmp" "$1"; } 2> /dev/null || status=$?
-  ((status == 0)) || echo "${0##*/}: cannot write ${1#"$AFFRAME_HOME/"}" >&2
-  return "$status"
+  { cat > "$1.tmp" && mv "$1.tmp" "$1"; } 2> /dev/null || die "cannot write ${1#"$AFFRAME_HOME/"}"
 }
 
-# quiet <log> <command>...: output to log/<log> on the host. Actions logs are public.
+# quiet <log> <command>...: output to log/<log> on the host.
 quiet() {
   local log="$1" status=0
   shift
@@ -173,7 +169,7 @@ live_colour() {
   echo "$colour"
 }
 
-# load_service <service> [<live colour>|-]: sets manifest, state, colour, new, name and old.
+# load_service <service> [<colour>|-]: sets the .conf and state keys, colour, new, name and old.
 load_service() {
   local manifest="$REPO/deploy/services/$1.conf"
   [[ -f "$manifest" ]] || die "no manifest deploy/services/$1.conf"
@@ -253,7 +249,7 @@ start_service() {
 
   pending+=("$name")
   docker rm -f "$name" > /dev/null 2>&1 || true
-  # On the db network before its first instruction runs. quiet: docker errors name the env file path.
+  # Joins the db network before it starts. quiet: docker errors name the env file path.
   quiet "$name-create.log" docker create --name "$name" --network "$EDGE_NETWORK" --restart unless-stopped \
     --memory "$MEMORY" --env-file "$AFFRAME_HOME/env/app.env" -e PORT="$PORT" --label afframe.service="$service" \
     "$image"
@@ -261,7 +257,6 @@ start_service() {
   docker start "$name" > /dev/null
 }
 
-# wait_healthy <service> <live colour>: runs as a background job, so it returns and never exits.
 wait_healthy() {
   local service="$1"
   local HOST="" PORT="" MEMORY="" MIGRATE="" current="" colour="" previous="" new="" name="" old=""
@@ -383,9 +378,10 @@ route_back() {
   done
 }
 
+# switch_all <held image or empty> <service>=<image>...
 switch_all() {
-  local spec i=0 held=""
-  [[ "${1:-}" != held=* ]] || { held="${1#held=}"; shift; }
+  local held="$1" spec i=0
+  shift
   undo_dir="$(mktemp -d)"
   # Every new colour is healthy and about to take traffic: none is removed on exit any more, or a
   # failure between two route writes would take down a service already switched.
@@ -462,7 +458,7 @@ main() {
       prepare
       start_all yes "${specs[@]}"
       retire_removed
-      switch_all "${specs[@]}"
+      switch_all "" "${specs[@]}"
       printf 'sha=%s\nrun=%s\n' "$sha" "$run" | write_file "$AFFRAME_HOME/state/.deployed"
       [[ ! -L "$AFFRAME_HOME/current" ]] || previous_release="$(readlink "$AFFRAME_HOME/current")"
       { ln -sfn "$REPO" "$AFFRAME_HOME/current.tmp" && mv -T "$AFFRAME_HOME/current.tmp" "$AFFRAME_HOME/current"; } \
@@ -481,7 +477,7 @@ main() {
       [[ -n "$previous" ]] || die "$service: no previous image to roll back to"
       docker image inspect "$previous" > /dev/null 2>&1 || die "$service: previous image $previous is gone"
       start_all no "$service=$previous"
-      switch_all "held=$current" "$service=$previous"
+      switch_all "$current" "$service=$previous"
       log "$service: rolled back; $current is held until a different image is deployed"
       ;;
     *)

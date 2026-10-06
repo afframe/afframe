@@ -31,12 +31,8 @@ read_vars() {
   local file="$1" key value name
   shift
   [[ -f "$file" ]] || return 0
-  # A relative name: Actions logs are public. return, not die: $(...) callers run without set -e.
-  if [[ ! -r "$file" ]]; then
-    file="${file#"$REPO/"}"
-    echo "${0##*/}: cannot read ${file#"$AFFRAME_HOME/"}" >&2
-    return 1
-  fi
+  # A relative name: Actions logs are public.
+  [[ -r "$file" ]] || { file="${file#"$REPO/"}"; die "cannot read ${file#"$AFFRAME_HOME/"}"; }
   while IFS='=' read -r key value; do
     for name in "$@"; do
       [[ "$key" == "$name" ]] && printf -v "$name" '%s' "$value"
@@ -52,27 +48,27 @@ psql_exec() {
   docker exec "$container" sh -c 'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"' psql "$@"
 }
 
+# wait_recovered <container> <seconds>: fails with the log tail while Postgres is still in recovery.
+wait_recovered() {
+  local i
+  for ((i = 0; i < $2; i++)); do
+    [[ "$(psql_exec "$1" -Atc 'select pg_is_in_recovery()' 2> /dev/null)" != f ]] || return 0
+    sleep 1
+  done
+  docker logs --tail 20 "$1" >&2
+  echo "$1: still in recovery after $2 s" >&2
+  return 1
+}
+
 # heartbeat <KEY> <exit code> [message]: ALERT_URL as well on a failure.
 heartbeat() {
-  local url alert
+  local url alert ping=(curl -fsS -m 10 --retry 3 -o /dev/null)
   url="$(env_value "$1")"
   alert="$(env_value ALERT_URL)"
   if [[ "$2" -eq 0 ]]; then
-    [[ -z "$url" ]] || curl -fsS -m 10 --retry 3 -o /dev/null "$url" || echo "heartbeat $1 failed" >&2
+    [[ -z "$url" ]] || "${ping[@]}" "$url" || echo "heartbeat $1 failed" >&2
     return 0
   fi
-  [[ -z "$url" ]] || curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "${3:-}" "$url/$2" \
-    || echo "heartbeat $1 failed" >&2
-  [[ -z "$alert" ]] || curl -fsS -m 10 --retry 3 -o /dev/null --data-raw "${0##*/}: ${3:-failed}" "$alert" \
-    || echo "alert failed" >&2
-}
-
-# write_sentinel: upserts the ops.heartbeat row that afframe-restore-drill checks; only warns.
-write_sentinel() {
-  log "heartbeat sentinel"
-  psql_exec "$POSTGRES" -q -v ON_ERROR_STOP=1 -c "
-    create schema if not exists ops;
-    create table if not exists ops.heartbeat (id int primary key, at timestamptz not null);
-    insert into ops.heartbeat values (1, now()) on conflict (id) do update set at = excluded.at" \
-    || echo "warning: ops.heartbeat sentinel not written; the restore drill will report stale data" >&2
+  [[ -z "$url" ]] || "${ping[@]}" --data-raw "${3:-}" "$url/$2" || echo "heartbeat $1 failed" >&2
+  [[ -z "$alert" ]] || "${ping[@]}" --data-raw "${0##*/}: ${3:-failed}" "$alert" || echo "alert failed" >&2
 }
