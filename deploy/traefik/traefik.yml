@@ -10,6 +10,7 @@ entryPoints:
     forwardedHeaders:
       trustedIPs: &cloudflare
         # https://www.cloudflare.com/ips/ (checked 2026-10-01)
+        # The host firewall copies these ranges: $INTERNAL/afframe-vps.md.
         - 173.245.48.0/20
         - 103.21.244.0/22
         - 103.22.200.0/22
