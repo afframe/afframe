@@ -15,6 +15,7 @@ fi
 # Before the backup, so the backup carries a fresh sentinel for afframe-restore-drill. Only warns.
 log "heartbeat sentinel"
 psql_exec "$POSTGRES" -q -v ON_ERROR_STOP=1 -c "
+  set client_min_messages = warning;
   create schema if not exists ops;
   create table if not exists ops.heartbeat (id int primary key, at timestamptz not null);
   insert into ops.heartbeat values (1, now()) on conflict (id) do update set at = excluded.at" \
