@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Fakes `docker` and `curl` on PATH: no daemon, Vault or heartbeat monitor needed.
 set -uo pipefail
 command -v jq > /dev/null || { echo "skip: needs jq"; exit 77; }
 [[ -e /proc/meminfo ]] || { echo "skip: needs /proc/meminfo"; exit 77; }
