@@ -2,6 +2,8 @@
 # Fakes `docker`, `sleep` and `id` on PATH: no daemon needed.
 set -uo pipefail
 for cmd in flock cmp sha256sum timeout; do command -v "$cmd" > /dev/null || { echo "skip: needs $cmd"; exit 77; }; done
+# The deploy host runs GNU tools: afframe-deploy uses `mv -T` and `\|` in sed patterns.
+for cmd in mv sed; do "$cmd" --version 2> /dev/null | grep -q GNU || { echo "skip: needs GNU $cmd"; exit 77; }; done
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d)"
