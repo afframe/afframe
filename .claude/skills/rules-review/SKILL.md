@@ -9,7 +9,7 @@ background: false
 
 # Rules review
 
-Review a change against the rules of this repository. Edit nothing.
+Edit nothing.
 
 1. Read the sections from "All files" to "YAML and workflows" in `AGENTS.md`. Read `docs/conventions.md`.
 2. Run `git diff origin/main...HEAD`. Read a changed file when a hunk needs more context.
