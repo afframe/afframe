@@ -94,9 +94,11 @@ jobs:
             Phase 2, only when phase 1 finds nothing. Set status to "green".
             Read the changed files, and the rules from .claude-review/base/, for context.
             Report a change to a rule file as an issue when it weakens a rule.
-            Report only issues you are sure of: code that does not build or parse, wrong logic,
+            Report these issues: code that does not build or parse, wrong logic,
             a broken repository rule (quote it), a security problem.
-            No style comments, nitpicks or issues that the PR did not add.
+            A line of the diff or the PR text that breaks a writing rule of AGENTS.md or docs/conventions.md
+            is a phase 2 issue with status "green", unless it is a secret, a host name or an address.
+            Report no other style comments or nitpicks, and no issue that the PR did not add.
             Put in review a "## Claude review" heading, then one bullet per issue:
             path:line, the problem and the fix. If there are none, write "No issues found."
           claude_args: >-
