@@ -9,7 +9,7 @@ ENV POSTGRES_USER=afframe \
 # Runs as postgres from the start, so gosu goes.
 RUN apt-get update \
   && apt-get upgrade -y \
-  && apt-get install -y --no-install-recommends pgbackrest \
+  && apt-get install -y --no-install-recommends ca-certificates pgbackrest \
   && rm -rf /var/lib/apt/lists/* /usr/local/bin/gosu \
   && mkdir -p /var/lib/pgbackrest \
   && chown postgres:postgres /var/lib/pgbackrest
