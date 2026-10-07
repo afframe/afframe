@@ -8,6 +8,7 @@ docker_config
 MAX_DISK_PERCENT="${AFFRAME_MAX_DISK_PERCENT:-85}"
 MIN_MEMORY_PERCENT="${AFFRAME_MIN_MEMORY_PERCENT:-10}"
 MAX_BACKUP_AGE_HOURS="${AFFRAME_MAX_BACKUP_AGE_HOURS:-$RPO_HOURS}"
+MIN_VAULT_DAYS="${AFFRAME_MIN_VAULT_DAYS:-30}"
 problems=()
 
 disk="$(df -P / | awk 'NR == 2 {print $5 + 0}')"
@@ -36,6 +37,21 @@ if docker inspect "$POSTGRES" > /dev/null 2>&1; then
   sql="select coalesce(last_failed_time > coalesce(last_archived_time, 'epoch'), false) from pg_stat_archiver"
   archiving="$(psql_exec "$POSTGRES" -Atc "$sql" 2> /dev/null || echo unknown)"
   [[ "$archiving" == f ]] || problems+=("WAL archiving failing ($archiving)")
+fi
+
+vault_credential
+if [[ -z "${VAULT_ADDR:-}" || -z "${VAULT_TOKEN:-}" ]]; then
+  problems+=("no Vault credential to check")
+else
+  # .data.ttl: jq cannot parse the nanoseconds and offset of .data.expire_time.
+  vault_days="$(curl -fsS -m 10 -H @- "$VAULT_ADDR/v1/auth/token/lookup-self" <<< "X-Vault-Token: $VAULT_TOKEN" \
+    2> /dev/null | jq -er 'if .data.expire_time == null then "never" else .data.ttl / 86400 | floor end' \
+    2> /dev/null || echo unknown)"
+  if [[ "$vault_days" == unknown ]]; then
+    problems+=("Vault credential lookup failed")
+  elif [[ "$vault_days" != never ]] && ((vault_days < MIN_VAULT_DAYS)); then
+    problems+=("Vault credential expires in ${vault_days} days")
+  fi
 fi
 
 if ((${#problems[@]} == 0)); then

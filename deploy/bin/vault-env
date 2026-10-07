@@ -4,9 +4,7 @@ set -euo pipefail
 # shellcheck source=deploy/bin/common.sh
 source "$(dirname "$0")/common.sh"
 
-# shellcheck disable=SC1091 # host config, not in the repo
-[[ ! -f "$AFFRAME_HOME/host.conf" ]] || source "$AFFRAME_HOME/host.conf"
-[[ -n "${VAULT_TOKEN:-}" || ! -f "$AFFRAME_HOME/vault-token" ]] || VAULT_TOKEN="$(< "$AFFRAME_HOME/vault-token")"
+vault_credential
 : "${VAULT_ADDR:?VAULT_ADDR is not set}" "${AFFRAME_VAULT_KV_PREFIX:?AFFRAME_VAULT_KV_PREFIX is not set}" \
   "${VAULT_TOKEN:?VAULT_TOKEN is not set}"
 # Traefik runs as root in its container: the files stay unreadable for other host users.
