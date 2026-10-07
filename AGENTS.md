@@ -113,6 +113,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 
 - Commit messages, PR titles and bodies, issue, review and comment text and release notes are public. "All files" applies to them.
 - After a `git commit`, a `gh` PR, issue or release call or a GitHub MCP write, `.claude/hooks/published-text.sh` reminds Claude Code of these rules. It does not block. Fix the text if it breaks a rule.
+- Before you open or update a PR or publish other text, run `/rules-review` with the draft title and body. Fix each finding before you publish.
 
 ## YAML and workflows
 
