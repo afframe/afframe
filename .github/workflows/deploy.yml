@@ -17,8 +17,8 @@ jobs:
   deploy:
     if: vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
-    # Above build, transfer and the timeouts in deploy/bin/afframe-deploy, which must stay below it:
-    # a timeout would cut the SSH session in the middle of a switch.
+    # Above build, scan, transfer and the timeouts in deploy/bin/afframe-deploy, which must stay
+    # below it: a timeout would cut the SSH session in the middle of a switch.
     timeout-minutes: 30
     concurrency:
       group: ${{ github.workflow }}

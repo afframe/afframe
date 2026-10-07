@@ -19,7 +19,7 @@ refuse_root() {
   [[ "$(id -u)" != 0 || "${AFFRAME_ALLOW_ROOT:-}" == 1 ]] || die "refusing to run as root"
 }
 
-# docker_config: a CLI config of its own, so no Docker warning names a path in the home folder.
+# docker_config: a CLI config folder this script owns, so no Docker warning names a home file.
 docker_config() {
   export DOCKER_CONFIG="$AFFRAME_HOME/docker"
   { mkdir -p "$DOCKER_CONFIG" && chmod 700 "$DOCKER_CONFIG"; } 2> /dev/null \
