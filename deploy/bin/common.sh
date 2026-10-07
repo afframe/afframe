@@ -67,15 +67,30 @@ wait_recovered() {
   return 1
 }
 
+# vault_credential: host.conf overrides the environment. The token file does not.
+vault_credential() {
+  # shellcheck disable=SC1091 # host config, not in the repo
+  [[ ! -f "$AFFRAME_HOME/host.conf" ]] || source "$AFFRAME_HOME/host.conf" || return
+  [[ -n "${VAULT_TOKEN:-}" || ! -f "$AFFRAME_HOME/vault-token" ]] || VAULT_TOKEN="$(< "$AFFRAME_HOME/vault-token")"
+}
+
+url_config() {
+  local url="${1//\\/\\\\}"
+  printf 'url = "%s"\n' "${url//\"/\\\"}"
+}
+
 # heartbeat <KEY> <exit code> [message]: ALERT_URL as well on a failure.
 heartbeat() {
-  local url alert ping=(curl -fsS -m 10 --retry 3 -o /dev/null)
+  # The URLs hold keys: curl reads them on stdin, never from argv, where `ps` would show them.
+  local url alert ping=(curl -fsS -m 10 --retry 3 -o /dev/null -K -)
   url="$(env_value "$1")"
   alert="$(env_value ALERT_URL)"
   if [[ "$2" -eq 0 ]]; then
-    [[ -z "$url" ]] || "${ping[@]}" "$url" || echo "heartbeat $1 failed" >&2
+    [[ -z "$url" ]] || "${ping[@]}" <<< "$(url_config "$url")" || echo "heartbeat $1 failed" >&2
     return 0
   fi
-  [[ -z "$url" ]] || "${ping[@]}" --data-raw "${3:-}" "$url/$2" || echo "heartbeat $1 failed" >&2
-  [[ -z "$alert" ]] || "${ping[@]}" --data-raw "${0##*/}: ${3:-failed}" "$alert" || echo "alert failed" >&2
+  [[ -z "$url" ]] || "${ping[@]}" --data-raw "${3:-}" <<< "$(url_config "$url/$2")" \
+    || echo "heartbeat $1 failed" >&2
+  [[ -z "$alert" ]] || "${ping[@]}" --data-raw "${0##*/}: ${3:-failed}" <<< "$(url_config "$alert")" \
+    || echo "alert failed" >&2
 }
