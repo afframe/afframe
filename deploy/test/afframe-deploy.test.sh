@@ -28,6 +28,7 @@ deploy="$release/deploy/bin/afframe-deploy"
 cat > "$FAKE/bin/docker" <<'FAKEDOCKER'
 #!/usr/bin/env bash
 echo "docker $*" >> "$FAKE/calls"
+echo "${DOCKER_CONFIG:-unset}" >> "$FAKE/configs"
 [[ "$1" != compose ]] || echo "traefik-hash ${AFFRAME_TRAEFIK_HASH:-}" >> "$FAKE/calls"
 # Output that must stay on the host: <kind>-secret.
 [[ "$1" != compose ]] || echo "compose-secret"
@@ -148,6 +149,7 @@ dep_env() {
     > "$FAKE/out" 2>&1
 }
 run() { : > "$FAKE/calls"; PATH="$FAKE/bin:$PATH" "$deploy" "$@" < /dev/null > /dev/null 2>&1; }
+host_job() { PATH="$FAKE/bin:$PATH" "$release/deploy/bin/$1" "${@:2}" < /dev/null > /dev/null 2>&1; }
 state() { sed -n "s/^$2=//p" "$AFFRAME_HOME/state/$1" 2> /dev/null; }
 route() { cat "$AFFRAME_HOME/traefik/dynamic/$1.yml" 2> /dev/null; }
 router() { route "$1" | awk -v r="    $2:" '$0 == r {f = 1; next} f && /^    [^ ]/ {f = 0} f && /^  [^ ]/ {f = 0} f'; }
@@ -270,6 +272,12 @@ check "route points at blue" grep -q "url: http://afframe-fixture-blue:8080" <<<
 check "no migration without MIGRATE" fails called "run --rm --network afframe-db"
 check "current points at the release" test "$(readlink "$AFFRAME_HOME/current")" == "$release"
 check "deployed run recorded" test "$(sed -n 's/^run=//p' "$AFFRAME_HOME/state/.deployed")" == "$n"
+check "every docker call uses the Docker config in AFFRAME_HOME" \
+  test "$(sort -u "$FAKE/configs")" == "$AFFRAME_HOME/docker"
+check "Docker config readable by the deploy user only" test "$(stat -c %a "$AFFRAME_HOME/docker")" == 700
+: > "$FAKE/configs"
+check "afframe-backup runs" host_job afframe-backup full
+check "with the Docker config in AFFRAME_HOME" test "$(sort -u "$FAKE/configs")" == "$AFFRAME_HOME/docker"
 
 rm "$AFFRAME_HOME/deploy.lock"
 mkdir "$AFFRAME_HOME/deploy.lock"
@@ -457,6 +465,24 @@ check "neither colour removed" test "$(grep -c '^afframe-fixture-' "$FAKE/contai
 check "nothing switched" test ! -f "$AFFRAME_HOME/traefik/dynamic/fixture.yml"
 printf 'current=%s\ncolour=%s\nprevious=\n' "$(img fixture 6)" "$live" > "$AFFRAME_HOME/state/fixture"
 check "deploy once the state is back" dep fixture=7
+route="$AFFRAME_HOME/traefik/dynamic/fixture.yml"
+cp "$route" "$work/fixture.yml"
+if [[ $EUID -ne 0 ]]; then # root reads a file without read permission
+  chmod 000 "$route"
+  fails_naming "an unreadable route fails the deploy" "cannot read traefik/dynamic/fixture.yml" dep fixture=7b
+  check "no container created for it" fails called "create --name"
+  chmod 644 "$route"
+fi
+echo "http: {}" > "$route"
+fails_naming "a route that names no colour fails the deploy" "traefik/dynamic/fixture.yml names no colour" \
+  dep fixture=7b
+check "no container created for it" fails called "create --name"
+cp "$work/fixture.yml" "$route"
+live="$(state fixture colour)"
+rm "$route"
+check "deploy with the route lost" dep fixture=7b
+check "live colour taken from the state, not recreated" fails called "create --name afframe-fixture-$live"
+check "switched to the other colour" grep -q "afframe-fixture-$(other "$live"):8080" <<< "$(route fixture)"
 
 echo flaky > "$FAKE/health"
 : > "$FAKE/probes"

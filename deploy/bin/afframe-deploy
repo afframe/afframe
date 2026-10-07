@@ -153,10 +153,15 @@ prepare() {
 live_colour() {
   local service="$1" colour="" running
   local route="$AFFRAME_HOME/traefik/dynamic/$service.yml"
-  if [[ -f "$route" ]]; then
-    colour="$(sed -n "s/^ *- url: http:\/\/$PROJECT-$service-\(blue\|green\):.*/\1/p" "$route" | head -n 1)"
+  # The switch writes the route before the state: only an absent route falls back to the state.
+  if [[ -e "$route" || -L "$route" ]]; then
+    colour="$(sed -n "s/^ *- url: http:\/\/$PROJECT-$service-\(blue\|green\):.*/\1/p" "$route" 2> /dev/null)" \
+      || die "$service: cannot read traefik/dynamic/$service.yml"
+    colour="${colour%%$'\n'*}"
+    [[ -n "$colour" ]] || die "$service: traefik/dynamic/$service.yml names no colour"
+  else
+    read_vars "$AFFRAME_HOME/state/$service" colour
   fi
-  [[ -n "$colour" ]] || read_vars "$AFFRAME_HOME/state/$service" colour
   if [[ -z "$colour" ]]; then
     running="$(docker ps --format '{{.Names}}' | sed -n "s/^$PROJECT-$service-\(blue\|green\)$/\1/p" | sort -u)"
     # A lost route and state must never make the live colour look idle.
@@ -445,6 +450,7 @@ main() {
       local services=("${@:4}")
       validate_services "${services[@]}"
       lock
+      docker_config
       # A re-run of an older run never replaces a newer deploy. The same run again may.
       local deployed="$AFFRAME_HOME/state/.deployed" deployed_run="" previous_release="" out specs=()
       [[ ! -f "$deployed" ]] || deployed_run="$(sed -n 's/^run=//p' "$deployed" 2> /dev/null)" \
@@ -472,6 +478,7 @@ main() {
       local service="${2:-}" current="" previous=""
       valid_service "$service" || die "usage: rollback <service>"
       lock
+      docker_config
       trap cleanup EXIT
       read_vars "$AFFRAME_HOME/state/$service" current previous
       [[ -n "$previous" ]] || die "$service: no previous image to roll back to"

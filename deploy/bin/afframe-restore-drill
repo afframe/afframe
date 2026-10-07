@@ -3,6 +3,7 @@ set -euo pipefail
 # shellcheck source=deploy/bin/common.sh
 source "$(dirname "$0")/common.sh"
 refuse_root
+docker_config
 
 name="$PROJECT-restore-drill"
 pgbackrest_env=(

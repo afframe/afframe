@@ -49,11 +49,12 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 1. A push to `main` runs `.github/workflows/deploy.yml`. A push that changes only `**.md` or `docs/**` files does not deploy. This includes Markdown files in `apps/`.
 2. The job runs only when the repository variable `DEPLOY_ENABLED` is `true`.
 3. The job stops unless the commit is the merge commit of a PR into the default branch.
-4. It joins the tailnet with OIDC and ships the release and the tested images as the Decision in `docs/adr/0001-images-streamed-to-deploy-host.md` states. `afframe-receive` unpacks the release.
-5. `afframe-deploy` refuses a run number lower than the deployed one. It renders the credentials and starts Traefik and Postgres when their inputs changed.
-6. For each changed service, it runs `MIGRATE` in the new image, starts the idle colour and waits for consecutive `/health` passes.
-7. It removes the services whose manifest is gone, switches Traefik, confirms the switch through Traefik and stops the old colours.
-8. A failure before the switch switches nothing. An unconfirmed switch routes back.
+4. It builds and tests the service images. A fixable critical CVE in one of them stops the deploy.
+5. It joins the tailnet with OIDC and ships the release and the tested images as the Decision in `docs/adr/0001-images-streamed-to-deploy-host.md` states. `afframe-receive` unpacks the release.
+6. `afframe-deploy` refuses a run number lower than the deployed one. It renders the credentials and starts Traefik and Postgres when their inputs changed.
+7. For each changed service, it runs `MIGRATE` in the new image, starts the idle colour and waits for consecutive `/health` passes.
+8. It removes the services whose manifest is gone, switches Traefik, confirms the switch through Traefik and stops the old colours.
+9. A failure before the switch switches nothing. An unconfirmed switch routes back.
 
 ### 6.2 Rollback
 
@@ -167,8 +168,8 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
    until [ "$(docker exec afframe-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select pg_is_in_recovery()"' 2> /dev/null)" = f ]; do sleep 5; done
    ```
 
+6. Turn on the deploys and run the Deploy workflow. The first release takes over the restored Postgres, and `stanza-create` accepts it.
 7. Take a full backup as in step 7 of the first procedure. Start the timers with the `systemctl start` command of step 8 of the first procedure.
-7. Take a full backup as in step 7 of the first procedure. Start the timers with the `systemctl` command of step 8.
 8. Remove the working copy from step 2:
 
    ```sh
@@ -186,7 +187,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 - `afframe-deploy` refuses a service name that has a file in `deploy/traefik/dynamic/`, because route files share that folder.
 - Host jobs refuse to run as root. A host drop-in sets the systemd user, and `$INTERNAL` documents it.
 - Some values repeat with a pointer comment and a test. Change every copy of the confirm port, the `afframe.tree` label, the root build inputs and the `AFFRAME_HOME` default.
-- `AFFRAME_HOME` holds the releases, `current`, the rendered env, TLS, state and the Traefik config. Nothing mounts from a release.
+- `AFFRAME_HOME` holds the releases, `current`, the rendered env, TLS, state, the Traefik config and the Docker CLI config of the host commands. Nothing mounts from a release.
 - `log/` in `AFFRAME_HOME` holds the output of infrastructure updates, migrations and failed health checks.
 - The host keeps the current and the previous release, and the current and the previous image of each service.
 

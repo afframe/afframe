@@ -3,6 +3,7 @@ set -euo pipefail
 # shellcheck source=deploy/bin/common.sh
 source "$(dirname "$0")/common.sh"
 refuse_root
+docker_config
 
 MAX_DISK_PERCENT="${AFFRAME_MAX_DISK_PERCENT:-85}"
 MIN_MEMORY_PERCENT="${AFFRAME_MIN_MEMORY_PERCENT:-10}"

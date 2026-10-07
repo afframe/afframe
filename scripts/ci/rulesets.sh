@@ -11,7 +11,7 @@ keys='{name, target, enforcement, conditions, bypass_actors, rules}'
 drift=0
 for file in .github/rulesets/*.json; do
   name="$(jq -r .name "$file")"
-  id="$(gh api "$api?includes_parents=false" --jq ".[] | select(.name == \"$name\") | .id")"
+  id="$(gh api --paginate "$api?includes_parents=false&per_page=100" --jq ".[] | select(.name == \"$name\") | .id")"
   if [[ "${1:-}" == apply ]]; then
     if [[ -n "$id" ]]; then gh api -X PUT "$api/$id" --input "$file" > /dev/null
     else gh api -X POST "$api" --input "$file" > /dev/null; fi
