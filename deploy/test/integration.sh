@@ -184,6 +184,9 @@ check "unknown host name gets no certificate" unknown_sni_refused
 check "loaded image keeps its ID (state blue, v1)" test "$(state colour) $(state current)" == "blue $id1"
 check "app env from Vault" test "$(docker exec "$PROJECT-$service-blue" printenv GREETING)" == hello
 check "current is the release" test "$(readlink "$AFFRAME_HOME/current")" == "$AFFRAME_HOME/releases/$s1"
+# The local backup repository needs no TLS. An S3 repository fails without this bundle.
+check "Postgres trusts public certificate authorities" \
+  docker exec "$POSTGRES" test -s /etc/ssl/certs/ca-certificates.crt
 
 check "second deploy" ship "$s2" 2 "$service"
 check "switched to green v2" test "$(state colour) $(state current) $(state previous)" == "green $id2 $id1"
