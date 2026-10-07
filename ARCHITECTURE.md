@@ -34,7 +34,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 | Integration | Configured in |
 |---|---|
 | Tailscale | `.github/workflows/deploy.yml` |
-| Vault | `deploy/bin/vault-env` |
+| Vault | `vault_credential` in `deploy/bin/common.sh` |
 | Cloudflare proxy and origin certificate | `deploy/traefik/` |
 | Backup repository | Vault |
 | Heartbeat monitor | Vault |

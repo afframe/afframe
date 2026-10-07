@@ -70,7 +70,7 @@ wait_recovered() {
 # vault_credential: host.conf overrides the environment. The token file does not.
 vault_credential() {
   # shellcheck disable=SC1091 # host config, not in the repo
-  [[ ! -f "$AFFRAME_HOME/host.conf" ]] || source "$AFFRAME_HOME/host.conf"
+  [[ ! -f "$AFFRAME_HOME/host.conf" ]] || source "$AFFRAME_HOME/host.conf" || return
   [[ -n "${VAULT_TOKEN:-}" || ! -f "$AFFRAME_HOME/vault-token" ]] || VAULT_TOKEN="$(< "$AFFRAME_HOME/vault-token")"
 }
 

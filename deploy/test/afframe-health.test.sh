@@ -24,7 +24,7 @@ FAKEDOCKER
 cat > "$FAKE/bin/curl" <<'FAKECURL'
 #!/usr/bin/env bash
 echo "$*" >> "$FAKE/args"
-{ cat; echo ---; } >> "$FAKE/stdin"
+case " $* " in *" -K - "* | *" -H @- "*) { cat; echo ---; } >> "$FAKE/stdin" ;; esac
 [[ "${*: -1}" == */v1/auth/token/lookup-self ]] || exit 0
 [[ "$(cat "$FAKE/vault")" != fail ]] || exit 22
 cat "$FAKE/vault"
@@ -37,15 +37,15 @@ check() {
   if "$@"; then echo "ok: $name"; else echo "FAIL: $name"; failures=$((failures + 1)); fi
 }
 fails() { ! "$@"; }
-# vault <ttl seconds|null|fail>: the shape Vault gives, with nanoseconds and an offset.
+# vault <ttl seconds|null|empty|fail>: the shape Vault gives, with nanoseconds and an offset.
 vault() {
   case "$1" in
     fail) echo fail ;;
+    empty) echo '{}' ;;
     null) echo '{"data": {"expire_time": null, "ttl": 0}}' ;;
     *) echo "{\"data\": {\"expire_time\": \"2026-10-12T09:15:54.466476215-04:00\", \"ttl\": $1}}" ;;
   esac > "$FAKE/vault"
 }
-# health [env argument]...
 health() {
   : > "$FAKE/args"
   : > "$FAKE/stdin"
@@ -77,6 +77,16 @@ check "no token on curl's command line" fails on_argv tok-secret-123
 
 check "threshold from AFFRAME_MIN_VAULT_DAYS" health AFFRAME_MIN_VAULT_DAYS=5
 
+vault $((29 * 86400 + 3600))
+check "29 days left: health fails" fails health
+check "and names the days left" reported "Vault credential expires in 29 days"
+vault $((30 * 86400 + 3600))
+check "30 days left: health ok" health
+
+vault empty
+check "lookup answer without data: health fails" fails health
+check "and says the lookup failed" reported "Vault credential lookup failed"
+
 vault fail
 check "lookup failure: health fails" fails health
 check "and says so" reported "Vault credential lookup failed"
@@ -89,7 +99,14 @@ check "token and address from the host files: health ok" health -u VAULT_ADDR -u
 check "token from the token file" sent "X-Vault-Token: tok-file-456"
 check "no token from the file on curl's command line" fails on_argv tok-file-456
 
-rm "$AFFRAME_HOME/host.conf" "$AFFRAME_HOME/vault-token"
+chmod 000 "$AFFRAME_HOME/vault-token"
+# Root reads the file anyway.
+if [[ "$(id -u)" != 0 ]]; then
+  check "unreadable token file: health fails" fails health -u VAULT_TOKEN
+  check "and says so" reported "cannot read the Vault credential"
+  check "and still sends the alert" sent 'url = "https://alert.test/al-key-secret"'
+fi
+rm -f "$AFFRAME_HOME/host.conf" "$AFFRAME_HOME/vault-token"
 check "no credential: health fails" fails health -u VAULT_TOKEN
 check "and says so" reported "no Vault credential to check"
 
@@ -97,6 +114,12 @@ check "and says so" reported "no Vault credential to check"
 url_config_of() { (source "$root/deploy/bin/common.sh" && url_config "$1"); }
 check "curl config escapes quotes and backslashes" \
   test "$(url_config_of 'https://x.test/a"b\c')" == 'url = "https://x.test/a\"b\\c"'
+# %{url} needs curl 7.75 or later.
+if [[ "$(curl -s -o /dev/null -w '%{url}' file:///dev/null)" == file:///dev/null ]]; then
+  odd='http://127.0.0.1:1/a"b\c'
+  check "curl reads the URL back from the config" \
+    test "$(url_config_of "$odd" | curl -s -o /dev/null -w '%{url}' -K -)" == "$odd"
+fi
 
 if ((failures > 0)); then
   echo "${failures} afframe-health check(s) failed"

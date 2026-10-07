@@ -14,7 +14,7 @@ mkdir -p "$FAKE/bin"
 cat > "$FAKE/bin/curl" <<'FAKECURL'
 #!/usr/bin/env bash
 echo "$*" >> "$FAKE/args"
-cat >> "$FAKE/stdin"
+case " $* " in *" -H @- "*) cat >> "$FAKE/stdin" ;; esac
 case "${*: -1}" in
   */infra) echo '{"data": {"data": {"SAMPLE_KEY": "pw", "ORIGIN_CERT_PEM": "cert", "ORIGIN_KEY_PEM": "key"}}}' ;;
   */app) echo '{"data": {"data": {"GREETING": "hello"}}}' ;;
