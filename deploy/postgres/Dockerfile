@@ -1,4 +1,4 @@
-FROM postgres:18@sha256:5a5a84b19854a9ffaa54082c166ff4ec27473a361e496e5ea167f298f2da9722
+FROM postgres:18@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
 ENV POSTGRES_USER=afframe \
   POSTGRES_DB=afframe \
   PGBACKREST_STANZA=afframe \
