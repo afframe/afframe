@@ -12,6 +12,10 @@ x-app: &app
     DATABASE_URL: postgres://afframe@postgres:5432/afframe
     # Not the image default, so the probe proves that the service reads $PORT.
     PORT: "9090"
+  # The restrictions of the deploy, set in deploy/bin/afframe-deploy.
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 512
   depends_on:
     postgres:
       condition: service_healthy

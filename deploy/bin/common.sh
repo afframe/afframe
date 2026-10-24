@@ -40,7 +40,7 @@ read_vars() {
   [[ -f "$file" ]] || return 0
   # A relative name: Actions logs are public.
   [[ -r "$file" ]] || { file="${file#"$REPO/"}"; die "cannot read ${file#"$AFFRAME_HOME/"}"; }
-  while IFS='=' read -r key value; do
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
     for name in "$@"; do
       [[ "$key" == "$name" ]] && printf -v "$name" '%s' "$value"
     done

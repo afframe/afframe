@@ -2,10 +2,15 @@ name: afframe
 
 services:
   traefik:
-    image: traefik:v3.7.13@sha256:24841fe2de7304c149343d877d2923b4c8800a38ba015dea9174c23b20e344a0
+    image: traefik:v3.7.16@sha256:c8a121e4bb1347e8fd52657fab12f2cb70b68f8a018895e2068f92c9e519b9c2
     container_name: ${COMPOSE_PROJECT_NAME:?}-traefik
     restart: unless-stopped
     mem_limit: 256m
+    pids_limit: 256
+    cap_drop: [ALL]
+    # DAC_OVERRIDE: vault-env writes tls/ as the host user with mode 600, and Traefik runs as root.
+    cap_add: [NET_BIND_SERVICE, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
     # Traefik reads traefik.yml and the certificate only at start, and compose does not recreate it
     # for a changed bind-mounted file: afframe-deploy puts a hash of those files in this label.
     labels:
@@ -30,6 +35,9 @@ services:
     container_name: ${COMPOSE_PROJECT_NAME:?}-postgres
     restart: unless-stopped
     mem_limit: 2g
+    pids_limit: 512
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     shm_size: 256m
     # ARCHITECTURE.md 6.3 step 3 and deploy/test/integration.sh stop Postgres with the same timeout.
     stop_grace_period: 120s

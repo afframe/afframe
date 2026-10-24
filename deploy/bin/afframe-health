@@ -7,7 +7,6 @@ docker_config
 
 MAX_DISK_PERCENT="${AFFRAME_MAX_DISK_PERCENT:-85}"
 MIN_MEMORY_PERCENT="${AFFRAME_MIN_MEMORY_PERCENT:-10}"
-MAX_BACKUP_AGE_HOURS="${AFFRAME_MAX_BACKUP_AGE_HOURS:-$RPO_HOURS}"
 MIN_VAULT_DAYS="${AFFRAME_MIN_VAULT_DAYS:-30}"
 problems=()
 
@@ -32,7 +31,7 @@ if docker inspect "$POSTGRES" > /dev/null 2>&1; then
   last="$(docker exec -u postgres "$POSTGRES" pgbackrest info --output=json 2> /dev/null \
     | jq '.[0].backup[-1].timestamp.stop // 0' 2> /dev/null || echo 0)"
   age_hours=$((($(date +%s) - last) / 3600))
-  ((age_hours <= MAX_BACKUP_AGE_HOURS)) || problems+=("last backup ${age_hours} h ago")
+  ((age_hours <= RPO_HOURS)) || problems+=("last backup ${age_hours} h ago")
 
   sql="select coalesce(last_failed_time > coalesce(last_archived_time, 'epoch'), false) from pg_stat_archiver"
   archiving="$(psql_exec "$POSTGRES" -Atc "$sql" 2> /dev/null || echo unknown)"

@@ -28,8 +28,9 @@ jobs:
           contains(fromJSON('["version-update:semver-patch", "version-update:semver-minor"]'),
             steps.meta.outputs.update-type)
           && steps.meta.outputs.package-ecosystem == 'docker'
-          && (contains(fromJSON('["/scripts/ci/toolbox", "/scripts/ci/trivy"]'), steps.meta.outputs.directory)
-            || startsWith(steps.meta.outputs.directory, '/deploy/test/images/'))
+          && (steps.meta.outputs.directory == '/scripts/ci/toolbox'
+            || (startsWith(steps.meta.outputs.directory, '/deploy/test/images/')
+              && steps.meta.outputs.directory != '/deploy/test/images/runner'))
         env:
           GH_TOKEN: ${{ github.token }}
           PR_ID: ${{ github.event.pull_request.node_id }}

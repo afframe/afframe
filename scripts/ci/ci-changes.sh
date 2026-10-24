@@ -19,7 +19,7 @@ fi
 if [[ -z "$base" || "$base" == all ]] || ! git cat-file -e "$base^{commit}" 2> /dev/null; then
   files="*"
 else
-  files="$(git diff --name-only "$base" HEAD)"
+  files="$(git diff --name-only --no-renames "$base" HEAD)"
 fi
 
 services="[]"

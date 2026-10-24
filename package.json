@@ -1,6 +1,6 @@
 {
   "private": true,
-  "packageManager": "pnpm@12.9.1",
+  "packageManager": "pnpm@12.15.0",
   "devDependencies": {
     "@colbymchenry/codegraph": "1.6.2"
   }

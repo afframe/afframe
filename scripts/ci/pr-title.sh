@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# The squash merge uses the PR title as the commit subject.
 # Usage: pr-title.sh "<title>"
 set -euo pipefail
 

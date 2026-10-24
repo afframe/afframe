@@ -1,4 +1,3 @@
-# Routes come from files only, so Traefik has no Docker socket.
 entryPoints:
   web:
     address: ":80"
@@ -43,6 +42,7 @@ entryPoints:
   confirm:
     address: "127.0.0.1:8081"
 
+# Routes come from files only, so Traefik has no Docker socket.
 providers:
   file:
     directory: /etc/traefik/dynamic

@@ -11,13 +11,13 @@ The sections from "All files" to "YAML and workflows" are the writing rules. The
 | `apps/<name>/` | One deployable service with its own `Dockerfile`. `apps/placeholder/` is a stand-in until the first real app. |
 | `packages/<name>/` | Shared code that apps use. It deploys only inside an app image. The folder does not exist until the first package. |
 | `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `.dockerignore` | The pnpm workspace root, and the files that app image builds get |
-| `.github/workflows/` | `ci.yml` and `pr-title.yml` are the PR gates. `deploy.yml` deploys and rolls back. `security.yml` runs the scheduled image scan. |
-| `scripts/ci/` | Shell for CI, the deploy workflow, the local gate and the rulesets. A `*.test.sh` is next to each tested script. |
+| `.github/workflows/` | `ci.yml` and `pr-title.yml` are the PR gates. `deploy.yml` deploys and rolls back. `security.yml` runs the scheduled image scan. `claude-code-review.yml` runs the owner's Claude review. `dependabot-auto-merge.yml` turns on auto-merge for the Dependabot updates that `ARCHITECTURE.md` section 6.5 names. |
+| `scripts/ci/` | Shell and tool images for CI, the deploy workflow, the local gate and the rulesets. A `*.test.sh` is next to each tested script. |
 | `deploy/` | The deploy host stack: host commands in `deploy/bin/`, `deploy/compose.prod.yml`, Postgres, Traefik, systemd units and service manifests |
 | `deploy/test/` | Tests of `deploy/`. The deploy does not ship this folder. |
 | `compose.ci.yml` | The service tests that CI and the deploy run |
 | `compose.dev.yml`, `scripts/dev/` | The dev Postgres of a local Conductor workspace |
-| `docs/templates/app/` | Starter files for a new app. Nothing runs them until you copy them. |
+| `docs/templates/app/` | Starter files for a new app. `docs/templates/app/README.md` gives the steps. |
 | `.mcp.json`, `.claude/`, `.conductor/`, `scripts/setup.sh`, `scripts/conductor/`, `favicon.svg` | Agent tooling, with the CodeGraph dependency in the root `package.json`. `favicon.svg` is the Conductor repository icon. |
 | `$INTERNAL` | The private documentation repository. It holds the deploy host facts. |
 
@@ -112,7 +112,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 ## Published text
 
 - Commit messages, PR titles and bodies, issue, review and comment text and release notes are public. "All files" applies to them.
-- After a `git commit`, a `gh` PR, issue or release call or a GitHub MCP write, `.claude/hooks/published-text.sh` reminds Claude Code of these rules. It does not block. Fix the text if it breaks a rule.
+- When Claude Code runs a `git commit`, a `gh` PR, issue or release call or a GitHub MCP write, `.claude/hooks/published-text.sh` reminds it of these rules. It does not block. Fix the text if it breaks a rule.
 - Before you open or update a PR or publish other text, run `/rules-review` with the draft title and body. Fix each finding before you publish.
 
 ## YAML and workflows
@@ -131,7 +131,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 - Fill in `.github/pull_request_template.md` for each PR.
 - Record a feature idea as an issue from `.github/ISSUE_TEMPLATE/feature.yml`.
 - Record a choice that a future contributor could reverse for a wrong reason as an ADR in `docs/adr/`. Use the next number and the shape of the newest ADR.
-- Never merge with `gh pr merge --admin`. Admins can bypass the rulesets, but agents must not.
+- Never merge with `gh pr merge --admin`. Admins can bypass the main ruleset in a PR merge, but agents must not.
 - `ci` and `pr-title` are the only merge gates. Merge when both pass.
 - AI reviews are advisory. Do not wait for them before a merge. The owner starts a Claude review with the `claude-review` label or a manual run of `claude-code-review.yml`.
 - CodeRabbit reviews a PR only on request: a comment `@coderabbitai review`.
@@ -143,6 +143,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 - A service is a folder `apps/<name>/` with a `Dockerfile`. The container listens on `$PORT` over IPv4 and IPv6.
 - The build context of an app image is the repository root, so `COPY` paths start at the root.
 - `GET /health` returns 2xx.
+- The container runs with no Linux capabilities, no-new-privileges and the process limit of `deploy/bin/afframe-deploy`. Run as a non-root user and listen on a port above 1023.
 - `compose.ci.yml` defines the services `test` and an optional `migrate`. For a real app, each one depends on the per-app services in `docs/templates/app/compose.ci.yml.example`. The exit code of `test` is the result. Start from `docs/templates/app/`.
 - CI and the deploy test the image that they ship. The header of `scripts/ci/service-tests.sh` tells how.
 - `deploy/services/<name>.conf` makes a service deployable. Its keys are `HOST`, `PORT`, `MEMORY` and `MIGRATE`.

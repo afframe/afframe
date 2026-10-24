@@ -32,6 +32,7 @@ reviews:
   auto_review:
     enabled: false
 chat:
+  auto_reply: false
   allow_non_org_members: false
 knowledge_base:
   code_guidelines:

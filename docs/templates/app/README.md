@@ -47,7 +47,7 @@ Nothing here runs in CI or in the deploy until you copy it. The templates fit a 
 
 ## SQL migrations
 
-Lint migrations with [squawk](https://squawkhq.com) (npm `squawk-cli`) in the `test` stage. Its default rules match "Database changes" in `AGENTS.md`. On a host with git history, lint the new migration files:
+Lint migrations with [squawk](https://squawkhq.com) (npm `squawk-cli`) in the `test` stage. Its default rules match "Database changes" in `AGENTS.md`. In a checkout with git history, lint the new migration files:
 
 ```
 git diff --name-only --diff-filter=A origin/main -- 'apps/<name>/migrations/*.sql' | xargs -r npx squawk --pg-version=<major> --assume-in-transaction

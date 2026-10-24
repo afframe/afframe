@@ -17,7 +17,7 @@
 | Service host name, port, memory, migration | `deploy/services/<name>.conf` | `read_vars` |
 | Deploy target (user and host) | one repository secret | `.github/workflows/deploy.yml`, through the secret context |
 | Switches and settings such as `DEPLOY_ENABLED` and `CLAUDE_REVIEW_OWNER` | repository variable | the `vars` context |
-| `AFFRAME_HOME` | default in `deploy/bin/common.sh`, or the environment | the host scripts |
+| `AFFRAME_HOME` | default in `deploy/bin/common.sh`, or the environment | the host commands |
 | Vault address and Vault path | `$AFFRAME_HOME/host.conf` | `vault_credential` in `deploy/bin/common.sh` |
 | systemd `User=` | a host drop-in, documented in `$INTERNAL` | systemd |
 | Runtime credentials | Vault | `deploy/bin/vault-env` |

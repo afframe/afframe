@@ -30,6 +30,13 @@ expect "create without a title" 2 Bash "$(bash_call 'gh pr create --fill')"
 expect "edit without a title" 0 Bash "$(bash_call 'gh pr edit 5 --add-label claude-review')"
 expect "other gh pr command" 0 Bash "$(bash_call 'gh pr view 5')"
 expect "gh pr create inside a commit message" 0 Bash "$(bash_call 'git commit -m "run gh pr create later"')"
+expect "gh pr create --title inside a commit message" 0 Bash \
+  "$(bash_call 'git commit -m "docs: describe the hook (gh pr create --title checks)"')"
+expect "separator inside a commit message" 0 Bash "$(bash_call 'git commit -m "fix: hook; gh pr create --title later"')"
+expect "gh pr create inside an echo string" 0 Bash "$(bash_call 'echo "x && gh pr create --fill"')"
+expect "bad title after git push" 2 Bash "$(bash_call 'git push && gh pr create --title "Add x"')"
+expect "bad title after an apostrophe in a commit message" 2 Bash \
+  "$(bash_call 'git commit -m "fix: don'"'"'t drop it" && gh pr create --title "Add x"')"
 expect "MCP good title" 0 mcp__github__create_pull_request '{"title": "feat: add invoices"}'
 expect "MCP bad title" 2 mcp__github__create_pull_request '{"title": "Add invoices"}'
 expect "MCP update without a title" 0 mcp__github__update_pull_request '{"body": "x"}'

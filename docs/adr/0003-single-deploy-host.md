@@ -23,7 +23,7 @@
 ## Consequences
 
 - One server runs every production container.
-- The deploy host is a single point of failure. A host outage stops every service.
+- The deploy host is a single point of failure. A deploy host outage stops every service.
 - One server limits the capacity. A service cannot scale out to a second host without a rework of `deploy/`.
 - A service deploy keeps the service reachable. The old colour runs until Traefik confirms the switch.
 - A change to the Traefik or Postgres inputs runs `compose up --build`. It can restart Traefik, Postgres or both. A restart interrupts every service.

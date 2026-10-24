@@ -19,7 +19,8 @@ commit() {
 # expect <name> <stdout> <base>   (exit code must be 0)
 expect() {
   local name="$1" want="$2" out
-  out="$(cd "$repo" && bash "$script" "$3" 2> /dev/null | tr '\n' ' ')"
+  out="$(cd "$repo" && bash "$script" "$3" 2> /dev/null)" || out="exit $?"
+  out="$(tr '\n' ' ' <<< "$out")"
   if [[ "$out" == "$want" ]]; then
     echo "ok: $name"
   else
@@ -63,6 +64,9 @@ prev="$next"
 commit apps/a/package.json docs/packages/x > /dev/null
 expect "an app's package.json or a packages/ name elsewhere is not shared" \
   "services=[$a] tests=true integration=false " "$prev"
+prev="$(git -C "$repo" rev-parse HEAD)"
+git -C "$repo" mv apps/a/package.json docs/package.json && git -C "$repo" commit -q -m mv
+expect "a rename out of an app changes the app" "services=[$a] tests=true integration=false " "$prev"
 expect "all builds everything and runs integration" "services=[$a,$b] tests=true integration=true " all
 expect "empty base means all" "services=[$a,$b] tests=true integration=true " ""
 expect "base unknown to git means all" "services=[$a,$b] tests=true integration=true " "$(printf 'f%.0s' {1..40})"

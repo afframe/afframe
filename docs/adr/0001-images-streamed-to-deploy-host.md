@@ -14,7 +14,7 @@
 
 - The deploy job builds every deployable service image and runs the service tests on those images.
 - The job connects to the deploy host over Tailscale SSH.
-- The job streams `git archive <sha> deploy` without `deploy/test` to the host. The host unpacks it as a new release.
+- The job streams `git archive <sha> deploy` without `deploy/test` to the host. The deploy host unpacks it as a new release.
 - The job streams `docker save` of the tested images to `afframe-deploy` of that release. `afframe-deploy` loads them with `docker load`.
 
 ## Consequences

@@ -25,7 +25,8 @@ archive_on_merge = true
 [prompts]
 create_pr = """\
 Commit and push the work. Open a pull request into main with a Conventional Commit title \
-that passes scripts/ci/pr-title.sh. Fill in every section of .github/pull_request_template.md."""
+that passes scripts/ci/pr-title.sh. Fill in every section of .github/pull_request_template.md. \
+Before you open it, run /rules-review with the draft title and body and fix each finding."""
 code_review = """\
 Review the diff against AGENTS.md, docs/conventions.md and ARCHITECTURE.md. \
 Report file:line findings only."""
