@@ -24,7 +24,7 @@ if [[ -z "${AFFRAME_TOOLBOX:-}" ]]; then
       [[ ! -e "$file" && ! -L "$file" ]] || printf '%s\0' "$file"
     done | tar --no-xattrs --null -T - -cf -
     tar --no-xattrs -C "$links" -chf - .git
-  } | docker run --rm -i -e CI "$image" bash -c \
+  } | docker run --rm -i -e CI -e AFFRAME_DEPLOY_TESTS "$image" bash -c \
     'cd "$(mktemp -d)" && git init -q && tar -xif - && exec bash scripts/ci/repo-lint.sh'
   exit 0
 fi
@@ -96,7 +96,11 @@ for name in "${checks[@]}"; do
   "check_$name" > "$logs/${#names[@]}.log" 2>&1 &
   names+=("$name") pids+=("$!")
 done
+if [[ "${AFFRAME_DEPLOY_TESTS:-}" == false ]]; then
+  echo "repo-lint: deploy/test/*.test.sh skipped: no change in deploy/ or scripts/ci/"
+fi
 while IFS= read -r test_script; do
+  [[ "${AFFRAME_DEPLOY_TESTS:-}" != false || "$test_script" != deploy/test/* ]] || continue
   bash "$test_script" > "$logs/${#names[@]}.log" 2>&1 &
   names+=("$test_script") pids+=("$!")
 done < <(git ls-files '*.test.sh')

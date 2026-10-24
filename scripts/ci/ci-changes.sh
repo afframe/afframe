@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prints what ci.yml builds and tests: services=<JSON [{name, dir}]>, tests=, integration=.
+# Prints what ci.yml runs: services=<JSON [{name, dir}]>, tests=, integration=, deploy_tests=.
 # Usage: ci-changes.sh <base-sha|all>   (an empty or unknown base means all)
 # Exits 1 for a deploy/services/ entry without compose.ci.yml: a skipped test passes `ci`.
 set -euo pipefail
@@ -35,7 +35,10 @@ tests=false
 [[ -f compose.ci.yml && "$services" != "[]" ]] && tests=true
 integration=false
 { [[ "$files" == "*" ]] || grep -Eq "$deploy" <<< "$files"; } && integration=true
+deploy_tests=false
+{ [[ "$files" == "*" ]] || grep -Eq '^(deploy/|scripts/ci/)' <<< "$files"; } && deploy_tests=true
 
 echo "services=$services"
 echo "tests=$tests"
 echo "integration=$integration"
+echo "deploy_tests=$deploy_tests"
