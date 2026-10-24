@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # gitleaks scans the history; ci-changes.sh diffs against the base parent
+          fetch-depth: 0 # gitleaks scans the history, and ci-changes.sh diffs against the base parent
           persist-credentials: false
       - run: bash scripts/ci/repo-lint.sh
       - name: Changes

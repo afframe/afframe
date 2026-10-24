@@ -243,7 +243,7 @@ start_service() {
     local migration="$PROJECT-$service-migrate"
     docker rm -f "$migration" > /dev/null 2>&1 || true
     # TERM after the timeout, KILL a grace period later (a migration ignoring TERM would keep the
-    # client waiting); then the named container goes too, as killing the client does not stop it.
+    # client waiting). Then the named container goes too, as killing the client does not stop it.
     # shellcheck disable=SC2086 # MIGRATE is a command line from the manifest
     if ! quiet "$migration.log" timeout -k "$MIGRATE_KILL_AFTER" "$MIGRATE_TIMEOUT" \
       docker run --rm --name "$migration" --network "$DB_NETWORK" --env-file "$AFFRAME_HOME/env/app.env" \

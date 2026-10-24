@@ -30,7 +30,7 @@ if [[ -z "${AFFRAME_TOOLBOX:-}" ]]; then
 fi
 
 check_actionlint() {
-  # actionlint does not know the ubuntu-26.04 runner label yet.
+  # actionlint does not know the ubuntu-26.04 runner label.
   actionlint -color -ignore 'label "ubuntu-26.04" is unknown'
 }
 

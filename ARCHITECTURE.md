@@ -59,19 +59,19 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 ### 6.2 Rollback
 
 1. Run the Deploy workflow manually with `rollback: <service>`. A manual run with an empty input deploys `main` again.
-2. The host runs the rollback from `current` with no build, so it works when `main` is broken.
+2. The deploy host runs the rollback from `current` with no build, so it works when `main` is broken.
 3. It starts the previous image without migrations and switches to it.
-4. The host holds the service on that image until a different image arrives. It refuses a second rollback.
+4. The deploy host holds the service on that image until a different image arrives. It refuses a second rollback.
 
 ### 6.3 Restore the database
 
 - Run the `systemctl stop` and `systemctl start` commands on the deploy host as root. Root installs and controls the timers.
-- Run the other host commands on the deploy host as the user of the host jobs. `$INTERNAL/afframe-deploy.md` describes the host.
+- Run the other host commands on the deploy host as the user of the host jobs. `$INTERNAL/afframe-deploy.md` describes the deploy host.
 - Export `AFFRAME_HOME` with the default in `deploy/bin/common.sh`. `deploy/host/systemd/afframe@.service` uses that path.
 - Run the `gh` commands on a workstation.
 - `deploy/test/integration.sh` runs steps 2 to 5 and 7 of the first procedure on its test stack, with a local backup repository.
 
-#### Restore the running host to a point in time
+#### Restore the running deploy host to a point in time
 
 1. Note the value of `DEPLOY_ENABLED` and stop the deploys. `gh variable get` fails when the variable is unset. Unset is a valid value to note. Wait until `gh run list` shows no queued or running Deploy run:
 
@@ -81,7 +81,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
    gh run list --workflow deploy.yml --repo afframe/afframe --limit 5
    ```
 
-   Then, on the host, stop the host jobs and wait until no host job is active:
+   Then, on the deploy host, stop the host jobs and wait until no host job is active:
 
    ```sh
    systemctl stop afframe-backup.timer afframe-health.timer afframe-restore-drill.timer
@@ -142,18 +142,18 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 
    If a Deploy run after the target time ran a migration, the code expects a newer schema. Roll that service back as section 6.2 states, or run its `MIGRATE` again.
 
-#### Restore onto a rebuilt host
+#### Restore onto a rebuilt deploy host
 
 The first release starts Postgres and creates the stanza. `stanza-create` needs a primary, and it must find the restored database. Thus the restore runs before the first deploy, and the recovery ends before it.
 
-1. Turn off the deploys as in step 1 of the first procedure. Make sure that Postgres on the old host is stopped. Then do the host setup in `$INTERNAL/afframe-deploy.md`. Do not run a deploy. If the host setup started the timers, stop them as in step 1 of the first procedure.
-2. Copy the `deploy/` folder of `main` to the host. On a workstation, in a checkout of `main`:
+1. Turn off the deploys as in step 1 of the first procedure. Make sure that Postgres on the old deploy host is stopped. Then do the host setup in `$INTERNAL/afframe-deploy.md`. Do not run a deploy. If the host setup started the timers, stop them as in step 1 of the first procedure.
+2. Copy the `deploy/` folder of `main` to the deploy host. On a workstation, in a checkout of `main`:
 
    ```sh
    git archive HEAD deploy | ssh <user of the host jobs>@<deploy host> 'mkdir -p afframe-restore && tar -x -C afframe-restore'
    ```
 
-3. On the host, render the credentials. Then build the Postgres image and create its container and volumes. Compose does not start Postgres.
+3. On the deploy host, render the credentials. Then build the Postgres image and create its container and volumes. Compose does not start Postgres.
 
    ```sh
    ~/afframe-restore/deploy/bin/vault-env
@@ -185,19 +185,20 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 - A change to `packages/` or a root workspace file gives every app a new label, so every app deploys. `label_of` in `scripts/ci/build-images.sh` lists these inputs.
 - Dependabot base-image updates change the tree, so they deploy. An unpinned upgrade inside a Dockerfile ships only with a source change.
 - `afframe-deploy` refuses a service name that has a file in `deploy/traefik/dynamic/`, because route files share that folder.
-- Host jobs refuse to run as root. A host drop-in sets the systemd user, and `$INTERNAL` documents it.
+- Host jobs refuse to run as root. `docs/conventions.md` section Configuration names the source of the systemd user.
 - Some values repeat with a pointer comment and a test. Change every copy of the confirm port, the `afframe.tree` label, the root build inputs and the `AFFRAME_HOME` default.
 - `AFFRAME_HOME` holds the releases, `current`, the rendered env, TLS, state, the Traefik config and the Docker CLI config of the host commands. Nothing mounts from a release.
 - `log/` in `AFFRAME_HOME` holds the output of infrastructure updates, migrations and failed health checks.
-- The host keeps the current and the previous release, and the current and the previous image of each service.
+- The deploy host keeps the current and the previous release, and the current and the previous image of each service.
 
 ### 6.5 CI and rulesets
 
 - `ci` runs the deploy integration test only when deploy files changed.
-- `ci` builds and tests every app when `packages/` or a root workspace file changed.
+- `ci` builds and tests every app when `packages/`, a root workspace file or a shared CI input changed. The `shared` pattern in `scripts/ci/ci-changes.sh` lists these inputs.
 - `.github/workflows/security.yml` scans the pinned Traefik image and fresh builds of the Postgres image and each deployable service on a schedule.
 - `.github/rulesets/main.json` requires PRs, the checks `ci` and `pr-title`, squash merge, linear history and signed commits. `scripts/ci/rulesets.sh` compares them with GitHub or applies them. A merge does not apply them. The squash commit title setting stays `PR_TITLE`, because the `pr-title` check validates the PR title.
 - `.github/rulesets/tags.json` protects `v*` tags from deletion and force-push, and requires linear history and signed commits.
+- `.github/workflows/dependabot-auto-merge.yml` turns on auto-merge for patch and minor Dependabot updates of the CI toolbox and the test images, except the runner image. Deployed images never auto-merge.
 
 ### 6.6 Values and their source files
 
@@ -233,7 +234,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 ## 9. Known Limits
 
 - Detection limits of the image scans: `$INTERNAL/security-limits.md`.
-- No test runs the restore onto a rebuilt host. `deploy/test/integration.sh` runs only the restore of the running host.
+- No test runs the restore onto a rebuilt deploy host. `deploy/test/integration.sh` runs only the restore of the running deploy host.
 - A deploy with unchanged images does not recreate the service containers. A rotated app credential reaches them only with the next image change or a rollback.
 
 ## 10. Project Identification

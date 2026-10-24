@@ -11,13 +11,13 @@ The sections from "All files" to "YAML and workflows" are the writing rules. The
 | `apps/<name>/` | One deployable service with its own `Dockerfile`. `apps/placeholder/` is a stand-in until the first real app. |
 | `packages/<name>/` | Shared code that apps use. It deploys only inside an app image. The folder does not exist until the first package. |
 | `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `.dockerignore` | The pnpm workspace root, and the files that app image builds get |
-| `.github/workflows/` | `ci.yml` and `pr-title.yml` are the PR gates. `deploy.yml` deploys and rolls back. `security.yml` runs the scheduled image scan. |
-| `scripts/ci/` | Shell for CI, the deploy workflow, the local gate and the rulesets. A `*.test.sh` is next to each tested script. |
+| `.github/workflows/` | `ci.yml` and `pr-title.yml` are the PR gates. `deploy.yml` deploys and rolls back. `security.yml` runs the scheduled image scan. `claude-code-review.yml` runs the owner's Claude review. `dependabot-auto-merge.yml` turns on auto-merge for CI image updates. |
+| `scripts/ci/` | Shell and tool images for CI, the deploy workflow, the local gate and the rulesets. A `*.test.sh` is next to each tested script. |
 | `deploy/` | The deploy host stack: host commands in `deploy/bin/`, `deploy/compose.prod.yml`, Postgres, Traefik, systemd units and service manifests |
 | `deploy/test/` | Tests of `deploy/`. The deploy does not ship this folder. |
 | `compose.ci.yml` | The service tests that CI and the deploy run |
 | `compose.dev.yml`, `scripts/dev/` | The dev Postgres of a local Conductor workspace |
-| `docs/templates/app/` | Starter files for a new app. Nothing runs them until you copy them. |
+| `docs/templates/app/` | Starter files for a new app. `docs/templates/app/README.md` gives the steps. |
 | `.mcp.json`, `.claude/`, `.conductor/`, `scripts/setup.sh`, `scripts/conductor/`, `favicon.svg` | Agent tooling, with the CodeGraph dependency in the root `package.json`. `favicon.svg` is the Conductor repository icon. |
 | `$INTERNAL` | The private documentation repository. It holds the deploy host facts. |
 
@@ -112,7 +112,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 ## Published text
 
 - Commit messages, PR titles and bodies, issue, review and comment text and release notes are public. "All files" applies to them.
-- After a `git commit`, a `gh` PR, issue or release call or a GitHub MCP write, `.claude/hooks/published-text.sh` reminds Claude Code of these rules. It does not block. Fix the text if it breaks a rule.
+- When Claude Code runs a `git commit`, a `gh` PR, issue or release call or a GitHub MCP write, `.claude/hooks/published-text.sh` reminds it of these rules. It does not block. Fix the text if it breaks a rule.
 - Before you open or update a PR or publish other text, run `/rules-review` with the draft title and body. Fix each finding before you publish.
 
 ## YAML and workflows

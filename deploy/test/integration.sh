@@ -2,7 +2,7 @@
 # Never run on the deploy host: it uses the same names.
 set -euo pipefail
 
-unset AFFRAME_HOME # the deploy-host check below uses the default; the run exports its own later
+unset AFFRAME_HOME # the deploy-host check below uses the default. The run exports its own later
 # shellcheck source=deploy/bin/common.sh
 source "$(dirname "$0")/../bin/common.sh"
 if [[ -e "$AFFRAME_HOME/current" || -L "$AFFRAME_HOME/current" ]]; then
