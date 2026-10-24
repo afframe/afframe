@@ -12,6 +12,7 @@ MIGRATE_TIMEOUT="${AFFRAME_MIGRATE_TIMEOUT:-300}"
 MIGRATE_KILL_AFTER="${AFFRAME_MIGRATE_KILL_AFTER:-10}" # seconds after TERM
 SWITCH_TIMEOUT="${AFFRAME_SWITCH_TIMEOUT:-15}"         # rounds of probes, one a second
 STOP_GRACE=30
+PIDS_LIMIT=512
 export AFFRAME_HOME
 
 # pending: new colours removed on exit. live: the live colour per service, - for none.
@@ -247,7 +248,7 @@ start_service() {
     # shellcheck disable=SC2086 # MIGRATE is a command line from the manifest
     if ! quiet "$migration.log" timeout -k "$MIGRATE_KILL_AFTER" "$MIGRATE_TIMEOUT" \
       docker run --rm --name "$migration" --network "$DB_NETWORK" --env-file "$AFFRAME_HOME/env/app.env" \
-      --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 "$image" $MIGRATE; then
+      --cap-drop ALL --security-opt no-new-privileges --pids-limit "$PIDS_LIMIT" "$image" $MIGRATE; then
       docker rm -f "$migration" > /dev/null 2>&1 || true
       die "$service: migration not run, failed or timed out; nothing switched"
     fi
@@ -258,7 +259,7 @@ start_service() {
   # Joins the db network before it starts. quiet: docker errors name the env file path.
   quiet "$name-create.log" docker create --name "$name" --network "$EDGE_NETWORK" --restart unless-stopped \
     --memory "$MEMORY" --env-file "$AFFRAME_HOME/env/app.env" -e PORT="$PORT" --label afframe.service="$service" \
-    --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 "$image"
+    --cap-drop ALL --security-opt no-new-privileges --pids-limit "$PIDS_LIMIT" "$image"
   docker network connect "$DB_NETWORK" "$name"
   docker start "$name" > /dev/null
 }
