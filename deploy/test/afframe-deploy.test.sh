@@ -228,12 +228,12 @@ for job in afframe-backup afframe-health afframe-restore-drill; do
   check "$job ran no docker command as root" test ! -s "$FAKE/calls"
 done
 
-check "short sha is refused" fails run deploy abc 1 fixture
-check "missing run number is refused" fails run deploy "$sha" fixture
-check "service without a manifest is refused" fails run deploy "$sha" 1 no-such-service
-check "service named like a static Traefik file is refused" fails run deploy "$sha" 1 tls
-check "service listed twice is refused" fails run deploy "$sha" 1 fixture fixture
-check "nothing ran for refused arguments" test ! -s "$FAKE/calls"
+refused() { ! run "$@" && test ! -s "$FAKE/calls"; }
+check "short sha is refused, nothing ran" refused deploy abc 1 fixture
+check "missing run number is refused, nothing ran" refused deploy "$sha" fixture
+check "service without a manifest is refused, nothing ran" refused deploy "$sha" 1 no-such-service
+check "service named like a static Traefik file is refused, nothing ran" refused deploy "$sha" 1 tls
+check "service listed twice is refused, nothing ran" refused deploy "$sha" 1 fixture fixture
 check "service missing from the image stream is refused" fails run deploy "$sha" 1 fixture
 check "no container started for the missing service" fails called "create --name"
 
@@ -267,6 +267,8 @@ check "new container on the db network before it starts" \
 check "new container created before it joins the db network" \
   before "create --name afframe-fixture-blue" "network connect afframe-db afframe-fixture-blue"
 check "container created from the host's image ID" called "create --name afframe-fixture-blue .* $v1$"
+check "with no capabilities, no-new-privileges and a process limit" \
+  called "create --name afframe-fixture-blue .* --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 "
 check "unused images and old build cache pruned" called "image prune -f"
 check "build cache older than a week only" called "builder prune -f --filter until=168h"
 check "state is blue v1" test "$(state fixture colour) $(state fixture current)" == "blue $v1"
@@ -318,14 +320,18 @@ check "old blue stopped gracefully" called "stop -t 30 afframe-fixture-blue"
 check "old blue removed after the stop" before "stop -t 30 afframe-fixture-blue" "rm -f afframe-fixture-blue"
 check "old blue gone" fails exists afframe-fixture-blue
 
-check "an older run is refused" fails run deploy "$sha" "$((n - 1))"
+older() {
+  : > "$FAKE/calls"
+  stream fixture=3 | PATH="$FAKE/bin:$PATH" "$deploy" deploy "$sha" "$((n - 1))" fixture > /dev/null 2>&1
+}
+check "an older run is refused" fails older
 check "nothing loaded for the older run" fails called "docker load"
 check "the same run again deploys (re-run)" run deploy "$sha" "$n"
 
 check "deploy with migration" dep migrated=1
 check "migration ran in the new image" \
   called "run --rm --name afframe-migrated-migrate --network afframe-db --env-file $AFFRAME_HOME/env/app.env \
-$(img migrated 1) migrate up"
+--cap-drop ALL --security-opt no-new-privileges --pids-limit 512 $(img migrated 1) migrate up"
 check "migration before the new container" before "migrate up" "create --name afframe-migrated-blue"
 check "migration container gone" fails exists afframe-migrated-migrate
 check "migration output kept out of the job log" fails printed migration-secret
@@ -392,6 +398,10 @@ check "rollback" run rollback fixture
 check "back on v1" test "$(state fixture current) $(state fixture previous)" == "$v1 $v2"
 check "the image rolled away from is held" test "$(state fixture held)" == "$v2"
 check "rollback skips migrations and loads nothing" fails called "load\|migrate"
+check "a second rollback is refused" fails run rollback fixture
+check "it changes nothing" test "$(state fixture current) $(state fixture held)" == "$v1 $v2"
+check "rollback of a service with MIGRATE" run rollback migrated
+check "runs no migration" fails called "migrate up"
 check "rollback of a service without history fails" fails run rollback unknown
 
 check "deploy offering the held image" dep fixture=2
@@ -413,6 +423,13 @@ check "its route points at it" grep -q "afframe-held-$(state held colour):8080" 
 rm "$release/deploy/services/held.conf"
 check "deploy that retires it" dep
 check "the state of held removed" test ! -e "$AFFRAME_HOME/state/held"
+printf 'HOST=tail.test\nPORT=3000\nMEMORY=64m\nMIGRATE=migrate up' > "$release/deploy/services/tail.conf"
+check "deploy of a manifest with no final newline" dep tail=1
+check "its last key is read: the migration ran" called "run --rm --name afframe-tail-migrate "
+rm "$release/deploy/services/tail.conf" "$AFFRAME_HOME/state/tail"
+check "deploy with a route left that has no state and no manifest" dep
+check "the stale route removed" test ! -e "$AFFRAME_HOME/traefik/dynamic/tail.yml"
+check "its container removed" fails grep -q '^afframe-tail-' "$FAKE/containers"
 
 echo A=2 > "$FAKE/infra.env"
 check "deploy after an infra secret change" dep
@@ -463,7 +480,8 @@ echo afframe-fixture-blue >> "$FAKE/containers"
 echo afframe-fixture-green >> "$FAKE/containers"
 rm "$AFFRAME_HOME/state/fixture" "$AFFRAME_HOME/traefik/dynamic/fixture.yml"
 check "both colours running and nothing says which is live: refused" fails dep fixture=7
-check "neither colour removed" test "$(grep -c '^afframe-fixture-' "$FAKE/containers")" -ge 2
+check "blue not removed" exists afframe-fixture-blue
+check "green not removed" exists afframe-fixture-green
 check "nothing switched" test ! -f "$AFFRAME_HOME/traefik/dynamic/fixture.yml"
 printf 'current=%s\ncolour=%s\nprevious=\n' "$(img fixture 6)" "$live" > "$AFFRAME_HOME/state/fixture"
 check "deploy once the state is back" dep fixture=7
@@ -547,6 +565,10 @@ mkdir "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
 fails_naming "a route that cannot be removed fails the deploy" "cannot remove traefik/dynamic/legacy.yml" dep fixture=13
 rmdir "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
 mv "$work/legacy.yml" "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
+echo fail > "$FAKE/remove"
+check "a colour of a removed service that cannot be removed fails the deploy" fails dep fixture=13
+check "its state kept for the next deploy" test -f "$AFFRAME_HOME/state/legacy"
+echo ok > "$FAKE/remove"
 check "deploy with a service removed from deploy/services" dep fixture=13
 check "its route removed" test ! -e "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
 check "its state removed" test ! -e "$AFFRAME_HOME/state/legacy"

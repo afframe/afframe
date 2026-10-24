@@ -143,6 +143,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 - A service is a folder `apps/<name>/` with a `Dockerfile`. The container listens on `$PORT` over IPv4 and IPv6.
 - The build context of an app image is the repository root, so `COPY` paths start at the root.
 - `GET /health` returns 2xx.
+- The container runs with no Linux capabilities, no-new-privileges and a limit of 512 processes. Run as a non-root user and listen on a port above 1023.
 - `compose.ci.yml` defines the services `test` and an optional `migrate`. For a real app, each one depends on the per-app services in `docs/templates/app/compose.ci.yml.example`. The exit code of `test` is the result. Start from `docs/templates/app/`.
 - CI and the deploy test the image that they ship. The header of `scripts/ci/service-tests.sh` tells how.
 - `deploy/services/<name>.conf` makes a service deployable. Its keys are `HOST`, `PORT`, `MEMORY` and `MIGRATE`.

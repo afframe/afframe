@@ -151,7 +151,7 @@ prepare() {
 
 # live_colour <service>: route colour, else state colour, else the only running one; fails on two.
 live_colour() {
-  local service="$1" colour="" running
+  local service="$1" colour="" running names
   local route="$AFFRAME_HOME/traefik/dynamic/$service.yml"
   # The switch writes the route before the state: only an absent route falls back to the state.
   if [[ -e "$route" || -L "$route" ]]; then
@@ -163,7 +163,8 @@ live_colour() {
     read_vars "$AFFRAME_HOME/state/$service" colour
   fi
   if [[ -z "$colour" ]]; then
-    running="$(docker ps --format '{{.Names}}' | sed -n "s/^$PROJECT-$service-\(blue\|green\)$/\1/p" | sort -u)"
+    names="$(docker ps --format '{{.Names}}')" || { echo "$service: cannot list containers" >&2; return 1; }
+    running="$(sed -n "s/^$PROJECT-$service-\(blue\|green\)$/\1/p" <<< "$names" | sort -u)"
     # A lost route and state must never make the live colour look idle.
     if [[ "$running" == *$'\n'* ]]; then
       echo "$service: both colours run and neither route nor state names the live one" >&2
@@ -246,7 +247,7 @@ start_service() {
     # shellcheck disable=SC2086 # MIGRATE is a command line from the manifest
     if ! quiet "$migration.log" timeout -k "$MIGRATE_KILL_AFTER" "$MIGRATE_TIMEOUT" \
       docker run --rm --name "$migration" --network "$DB_NETWORK" --env-file "$AFFRAME_HOME/env/app.env" \
-      "$image" $MIGRATE; then
+      --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 "$image" $MIGRATE; then
       docker rm -f "$migration" > /dev/null 2>&1 || true
       die "$service: migration not run, failed or timed out; nothing switched"
     fi
@@ -257,7 +258,7 @@ start_service() {
   # Joins the db network before it starts. quiet: docker errors name the env file path.
   quiet "$name-create.log" docker create --name "$name" --network "$EDGE_NETWORK" --restart unless-stopped \
     --memory "$MEMORY" --env-file "$AFFRAME_HOME/env/app.env" -e PORT="$PORT" --label afframe.service="$service" \
-    "$image"
+    --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 "$image"
   docker network connect "$DB_NETWORK" "$name"
   docker start "$name" > /dev/null
 }
@@ -412,19 +413,24 @@ retire_old() {
 }
 
 retire_removed() {
-  local state service colour names
+  local file service colour names state
   shopt -s nullglob
-  for state in "$AFFRAME_HOME"/state/*; do
-    service="${state##*/}"
-    [[ ! -f "$REPO/deploy/services/$service.conf" ]] || continue
+  for file in "$AFFRAME_HOME"/state/* "$AFFRAME_HOME"/traefik/dynamic/*.yml; do
+    service="${file##*/}"
+    service="${service%.yml}"
+    state="$AFFRAME_HOME/state/$service"
+    [[ ! -f "$REPO/deploy/services/$service.conf" && ! -e "$REPO/deploy/traefik/dynamic/$service.yml" ]] || continue
+    # A service with both a state and a route comes up twice.
+    [[ -e "$state" || -e "$AFFRAME_HOME/traefik/dynamic/$service.yml" ]] || continue
     log "$service: removed from deploy/services; retiring its route, containers and state"
     rm -f "$AFFRAME_HOME/traefik/dynamic/$service.yml" 2> /dev/null \
       || die "$service: cannot remove traefik/dynamic/$service.yml"
     names="$(docker ps -a --format '{{.Names}}')"
     for colour in blue green; do
       grep -qxF "$PROJECT-$service-$colour" <<< "$names" || continue
+      # die keeps the state, so the next deploy retries.
       docker rm -f "$PROJECT-$service-$colour" > /dev/null 2>&1 \
-        || echo "warning: could not remove $PROJECT-$service-$colour" >&2
+        || die "$service: cannot remove $PROJECT-$service-$colour"
     done
     rm -f "$state" 2> /dev/null || die "$service: cannot remove state/$service"
   done
@@ -471,16 +477,18 @@ main() {
         2> /dev/null || die "cannot point current at this release"
       # The current release again: the release before it is unknown here, so nothing is pruned.
       [[ "$previous_release" == "$REPO" ]] || prune_releases "$previous_release"
-      prune_images
+      # A subshell, so a die in it only warns: .deployed and current are written.
+      (prune_images) || echo "warning: image prune failed" >&2
       log "deployed $sha (run $run)"
       ;;
     rollback)
-      local service="${2:-}" current="" previous=""
+      local service="${2:-}" current="" previous="" held=""
       valid_service "$service" || die "usage: rollback <service>"
       lock
       docker_config
       trap cleanup EXIT
-      read_vars "$AFFRAME_HOME/state/$service" current previous
+      read_vars "$AFFRAME_HOME/state/$service" current previous held
+      [[ -z "$held" ]] || die "$service: already rolled back; deploy a different image"
       [[ -n "$previous" ]] || die "$service: no previous image to roll back to"
       docker image inspect "$previous" > /dev/null 2>&1 || die "$service: previous image $previous is gone"
       start_all no "$service=$previous"

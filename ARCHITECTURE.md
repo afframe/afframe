@@ -54,14 +54,14 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 6. `afframe-deploy` refuses a run number lower than the deployed one. It renders the credentials and starts Traefik and Postgres when their inputs changed.
 7. For each changed service, it runs `MIGRATE` in the new image, starts the idle colour and waits for consecutive `/health` passes.
 8. It removes the services whose manifest is gone, switches Traefik, confirms the switch through Traefik and stops the old colours.
-9. A failure before the switch switches nothing. An unconfirmed switch routes back.
+9. A failure before the switch switches nothing. An unconfirmed switch routes back. A failure between two route writes leaves the services already routed on their new colour, with both colours running.
 
 ### 6.2 Rollback
 
 1. Run the Deploy workflow manually with `rollback: <service>`. A manual run with an empty input deploys `main` again.
 2. The host runs the rollback from `current` with no build, so it works when `main` is broken.
 3. It starts the previous image without migrations and switches to it.
-4. The host holds the service on that image until a different image arrives.
+4. The host holds the service on that image until a different image arrives. It refuses a second rollback.
 
 ### 6.3 Restore the database
 
@@ -234,6 +234,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 
 - Detection limits of the image scans: `$INTERNAL/security-limits.md`.
 - No test runs the restore onto a rebuilt host. `deploy/test/integration.sh` runs only the restore of the running host.
+- A deploy with unchanged images does not recreate the service containers. A rotated app credential reaches them only with the next image change or a rollback.
 
 ## 10. Project Identification
 
