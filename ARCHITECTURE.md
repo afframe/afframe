@@ -24,10 +24,9 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 - Postgres runs on the deploy host from `deploy/postgres/Dockerfile`. The services reach it on the internal network `db`.
 - Postgres also joins the network `egress` to reach the backup repository. It publishes no ports.
 - Postgres has two roles. The superuser is the `POSTGRES_USER` of `deploy/postgres/Dockerfile`. The host jobs, the backups and the role setup use it.
-- Services and migrations connect as `afframe_app` through `DATABASE_URL`. This role is not a superuser. It can create objects in the schema `public`.
-- `afframe-deploy` creates `afframe_app` on each deploy, sets its password and grants its privileges before the migrations run.
-- The schema `ops` belongs to the superuser. `afframe_app` has no grant on it.
-- `docs/adr/0005-app-database-role.md` gives the reasons for the app role.
+- Services and migrations connect as the app role (`APP_ROLE` in `deploy/bin/common.sh`).
+- `afframe-deploy` creates the app role when it is absent. It sets the password of the role on each deploy, before the migrations run.
+- `docs/adr/0005-app-database-role.md` gives the privileges of the app role and their reasons.
 - pgBackRest archives WAL and takes scheduled backups to the backup repository that Vault configures.
 - Each backup writes a sentinel row to `ops.heartbeat`. A failed sentinel write only warns.
 - The restore drill restores the latest backup with WAL into a throwaway container and never touches the live database.
@@ -243,6 +242,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 ## 9. Known Limits
 
 - Detection limits of the image scans: `$INTERNAL/security-limits.md`.
+- A service keeps the connection URL of its start. A rotation of the app database password needs every service recreated. Rotate it with a deploy that changes every image.
 - No test runs the restore onto a rebuilt deploy host. `deploy/test/integration.sh` runs only the restore of the running deploy host.
 - A deploy with unchanged images does not recreate the service containers. A rotated app credential reaches them only with the next image change or a rollback.
 

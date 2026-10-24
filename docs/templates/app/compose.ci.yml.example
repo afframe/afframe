@@ -9,7 +9,7 @@ x-app: &app
     dockerfile: apps/web/Dockerfile
   environment:
     # User and database are the ENV of deploy/postgres/Dockerfile. CI connects as that superuser,
-    # the deploy as afframe_app (deploy/bin/vault-env).
+    # the deploy as the app role (APP_ROLE in deploy/bin/common.sh).
     DATABASE_URL: postgres://afframe@postgres:5432/afframe
     # Not the image default, so the probe proves that the service reads $PORT.
     PORT: "9090"
