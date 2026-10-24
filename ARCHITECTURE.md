@@ -193,7 +193,10 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 
 ### 6.5 CI and rulesets
 
-- `ci` runs the deploy integration test only when deploy files changed.
+- `.github/workflows/ci.yml` runs lint, build and the deploy integration test as parallel jobs. The `ci` check passes when each of them passes or skips.
+- On a PR, the deploy integration test runs only when deploy files changed.
+- On a PR, the deploy unit tests run only when `deploy/` or `scripts/ci/` changed.
+- A scheduled `ci` run builds and tests everything. `on.schedule` in `.github/workflows/ci.yml` sets the schedule.
 - `ci` builds and tests every app when `packages/`, a root workspace file or a shared CI input changed. The `shared` pattern in `scripts/ci/ci-changes.sh` lists these inputs.
 - `.github/workflows/security.yml` scans the pinned Traefik image and fresh builds of the Postgres image and each deployable service on a schedule.
 - `.github/rulesets/main.json` requires PRs, the checks `ci` and `pr-title`, squash merge, linear history and signed commits. `scripts/ci/rulesets.sh` compares them with GitHub or applies them. A merge does not apply them. The squash commit title setting stays `PR_TITLE`, because the `pr-title` check validates the PR title.
