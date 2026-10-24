@@ -273,7 +273,7 @@ check "unused images and old build cache pruned" called "image prune -f"
 check "build cache older than a week only" called "builder prune -f --filter until=168h"
 check "state is blue v1" test "$(state fixture colour) $(state fixture current)" == "blue $v1"
 check "route points at blue" grep -q "url: http://afframe-fixture-blue:8080" <<< "$(route fixture)"
-check "no migration without MIGRATE" fails called "run --rm --network afframe-db"
+check "no migration without MIGRATE" fails called "run --rm --name afframe-fixture-migrate "
 check "current points at the release" test "$(readlink "$AFFRAME_HOME/current")" == "$release"
 check "deployed run recorded" test "$(sed -n 's/^run=//p' "$AFFRAME_HOME/state/.deployed")" == "$n"
 check "every docker call uses the Docker config in AFFRAME_HOME" \
