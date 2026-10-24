@@ -143,6 +143,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 - A service is a folder `apps/<name>/` with a `Dockerfile`. The container listens on `$PORT` over IPv4 and IPv6.
 - The build context of an app image is the repository root, so `COPY` paths start at the root.
 - `GET /health` returns 2xx.
+- The container gets `DATABASE_URL` for the app role. The app role (`APP_ROLE` in `deploy/bin/common.sh`) is not a superuser.
 - The container runs with no Linux capabilities, no-new-privileges and the process limit of `deploy/bin/afframe-deploy`. Run as a non-root user and listen on a port above 1023.
 - `compose.ci.yml` defines the services `test` and an optional `migrate`. For a real app, each one depends on the per-app services in `docs/templates/app/compose.ci.yml.example`. The exit code of `test` is the result. Start from `docs/templates/app/`.
 - CI and the deploy test the image that they ship. The header of `scripts/ci/service-tests.sh` tells how.
@@ -154,5 +155,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 ## Database changes
 
 - `MIGRATE` runs in the new image before the switch, while the old colour still serves traffic. Each migration must work with the old code.
+- Migrations run as the app role. It can create schemas and objects, and it owns them. It cannot run statements that need a superuser.
+- CI runs migrations as the superuser. A statement that needs a superuser passes in CI and fails in the deploy.
 - Use expand and contract: add new columns and tables, backfill, switch reads. Remove the old parts in a later deploy.
 - Use `CREATE INDEX CONCURRENTLY`. Add constraints as `NOT VALID`, then `VALIDATE`. Set `lock_timeout` in each migration.

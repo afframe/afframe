@@ -97,6 +97,11 @@ ship() {
 # The deliberately broken image never gets healthy: give up sooner than for real images.
 ship_broken() { AFFRAME_HEALTH_TRIES="${INTEGRATION_BROKEN_HEALTH_TRIES:-3}" ship "$@"; }
 psql_prod() { psql_exec "$POSTGRES" -Atc "$1"; }
+app_psql() {
+  # shellcheck disable=SC2016 # expanded by the container's shell
+  docker run --rm --network "$DB_NETWORK" --env-file "$AFFRAME_HOME/env/app.env" "$POSTGRES:local" \
+    sh -c 'exec psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "$1"' sh "$1"
+}
 drill_fails() {
   local output
   if output="$("$current/afframe-restore-drill" 2>&1)"; then return 1; fi
@@ -166,7 +171,7 @@ curl -fsS --retry 30 --retry-all-errors --retry-delay 1 "$VAULT_ADDR/v1/sys/heal
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$HOST" \
   -addext "subjectAltName=DNS:$HOST,DNS:*.$HOST" -keyout "$work/origin.key" -out "$work/origin.crt" 2> /dev/null
 jq -n --rawfile cert "$work/origin.crt" --rawfile key "$work/origin.key" '{data: {
-  POSTGRES_PASSWORD: "integration",
+  POSTGRES_PASSWORD: "integration", APP_DB_PASSWORD: "app@integration/50%",
   PGBACKREST_REPO1_TYPE: "posix", PGBACKREST_REPO1_PATH: "/var/lib/pgbackrest",
   PGBACKREST_REPO1_CIPHER_TYPE: "aes-256-cbc", PGBACKREST_REPO1_CIPHER_PASS: "integration",
   ORIGIN_CERT_PEM: $cert, ORIGIN_KEY_PEM: $key}}' \
@@ -184,6 +189,11 @@ check "unknown host name gets no certificate" unknown_sni_refused
 check "loaded image keeps its ID (state blue, v1)" test "$(state colour) $(state current)" == "blue $id1"
 check "app env from Vault" test "$(docker exec "$PROJECT-$service-blue" printenv GREETING)" == hello
 check "current is the release" test "$(readlink "$AFFRAME_HOME/current")" == "$AFFRAME_HOME/releases/$s1"
+check "app role is not a superuser" \
+  test "$(psql_prod "select rolsuper from pg_roles where rolname = 'afframe_app'")" == f
+check "app connects with DATABASE_URL and owns what it creates" test "$(app_psql \
+  "create table app_check (x int); select tableowner from pg_tables where tablename = 'app_check'")" == afframe_app
+psql_prod "drop table if exists app_check" > /dev/null
 # The local backup repository needs no TLS. An S3 repository fails without this bundle.
 check "Postgres trusts public certificate authorities" \
   docker exec "$POSTGRES" test -s /etc/ssl/certs/ca-certificates.crt
@@ -218,6 +228,8 @@ psql_prod "create table drill (x int); insert into drill values (42)" > /dev/nul
 check "full backup" "$current/afframe-backup" full
 check "sentinel written" \
   test "$(psql_prod "select count(*) from ops.heartbeat where at > now() - interval '1 hour'")" -eq 1
+check "app cannot read the ops schema" \
+  grep -q 'permission denied for schema ops' <<< "$(app_psql 'select * from ops.heartbeat' 2>&1)"
 psql_prod "insert into drill values (43); select pg_switch_wal()" > /dev/null
 check "diff backup" "$current/afframe-backup" diff
 check "health ok" "$current/afframe-health"

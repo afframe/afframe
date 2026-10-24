@@ -150,6 +150,32 @@ prepare() {
   printf 'hash=%s\n' "$now" | write_file "$AFFRAME_HOME/state/.infra"
 }
 
+# ensure_app_role: psql reads the password from the Postgres environment, never from an argv.
+ensure_app_role() {
+  local i
+  for ((i = 0; i < 60; i++)); do
+    docker exec "$POSTGRES" pg_isready -q > /dev/null 2>&1 && break
+    sleep 1
+  done
+  if ((i == 60)); then
+    quiet app-role.log docker exec "$POSTGRES" pg_isready || true
+    die "Postgres not ready; nothing switched"
+  fi
+  # shellcheck disable=SC2016 # expanded by the container's shell
+  quiet app-role.log docker exec -i "$POSTGRES" sh -c \
+    'exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1' <<SQL \
+    || die "cannot set up the database role $APP_ROLE; nothing switched"
+\\getenv pw APP_DB_PASSWORD
+\\getenv db POSTGRES_DB
+SELECT 'CREATE ROLE $APP_ROLE' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$APP_ROLE') \\gexec
+-- A failed statement with the password never reaches the server log.
+SET log_min_error_statement = panic;
+ALTER ROLE $APP_ROLE LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'pw';
+GRANT CONNECT, TEMP, CREATE ON DATABASE :"db" TO $APP_ROLE;
+GRANT USAGE, CREATE ON SCHEMA public TO $APP_ROLE;
+SQL
+}
+
 # live_colour <service>: route colour, else state colour, else the only running one; fails on two.
 live_colour() {
   local service="$1" colour="" running names
@@ -469,6 +495,7 @@ main() {
       out="$(load_images "$sha" "${services[@]}")"
       [[ -z "$out" ]] || mapfile -t specs <<< "$out"
       prepare
+      ensure_app_role
       start_all yes "${specs[@]}"
       retire_removed
       switch_all "" "${specs[@]}"

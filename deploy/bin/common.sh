@@ -11,6 +11,7 @@ TRAEFIK="$PROJECT-traefik"
 POSTGRES="$PROJECT-postgres"
 EDGE_NETWORK="$PROJECT-edge"
 DB_NETWORK="$PROJECT-db"
+APP_ROLE=afframe_app
 PGBACKREST_VOLUME=afframe-pgbackrest # literal, like its name: in deploy/compose.prod.yml
 RPO_HOURS=26 # recovery point target: above the interval of deploy/host/systemd/afframe-backup.timer
 
