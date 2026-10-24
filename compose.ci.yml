@@ -8,6 +8,10 @@ services:
       context: .
       dockerfile: apps/placeholder/Dockerfile
     environment: *port
+    # The restrictions of the deploy, set in deploy/bin/afframe-deploy.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
     # Docker may disable IPv6 in containers: turn it on so the [::1] check below is real.
     sysctls:
       net.ipv6.conf.all.disable_ipv6: 0

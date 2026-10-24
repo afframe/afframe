@@ -565,6 +565,8 @@ mkdir "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
 fails_naming "a route that cannot be removed fails the deploy" "cannot remove traefik/dynamic/legacy.yml" dep fixture=13
 rmdir "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
 mv "$work/legacy.yml" "$AFFRAME_HOME/traefik/dynamic/legacy.yml"
+# The containers go before the route, so the failed route removal above already removed them.
+printf '%s\n' afframe-legacy-blue afframe-legacy-green >> "$FAKE/containers"
 echo fail > "$FAKE/remove"
 check "a colour of a removed service that cannot be removed fails the deploy" fails dep fixture=13
 check "its state kept for the next deploy" test -f "$AFFRAME_HOME/state/legacy"

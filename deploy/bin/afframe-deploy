@@ -424,15 +424,15 @@ retire_removed() {
     # A service with both a state and a route comes up twice.
     [[ -e "$state" || -e "$AFFRAME_HOME/traefik/dynamic/$service.yml" ]] || continue
     log "$service: removed from deploy/services; retiring its route, containers and state"
-    rm -f "$AFFRAME_HOME/traefik/dynamic/$service.yml" 2> /dev/null \
-      || die "$service: cannot remove traefik/dynamic/$service.yml"
     names="$(docker ps -a --format '{{.Names}}')"
     for colour in blue green; do
       grep -qxF "$PROJECT-$service-$colour" <<< "$names" || continue
-      # die keeps the state, so the next deploy retries.
+      # Containers first: a die here keeps the route and the state, so the next deploy retries.
       docker rm -f "$PROJECT-$service-$colour" > /dev/null 2>&1 \
         || die "$service: cannot remove $PROJECT-$service-$colour"
     done
+    rm -f "$AFFRAME_HOME/traefik/dynamic/$service.yml" 2> /dev/null \
+      || die "$service: cannot remove traefik/dynamic/$service.yml"
     rm -f "$state" 2> /dev/null || die "$service: cannot remove state/$service"
   done
   shopt -u nullglob

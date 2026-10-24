@@ -11,7 +11,7 @@ The sections from "All files" to "YAML and workflows" are the writing rules. The
 | `apps/<name>/` | One deployable service with its own `Dockerfile`. `apps/placeholder/` is a stand-in until the first real app. |
 | `packages/<name>/` | Shared code that apps use. It deploys only inside an app image. The folder does not exist until the first package. |
 | `package.json`, `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `.dockerignore` | The pnpm workspace root, and the files that app image builds get |
-| `.github/workflows/` | `ci.yml` and `pr-title.yml` are the PR gates. `deploy.yml` deploys and rolls back. `security.yml` runs the scheduled image scan. `claude-code-review.yml` runs the owner's Claude review. `dependabot-auto-merge.yml` turns on auto-merge for CI image updates. |
+| `.github/workflows/` | `ci.yml` and `pr-title.yml` are the PR gates. `deploy.yml` deploys and rolls back. `security.yml` runs the scheduled image scan. `claude-code-review.yml` runs the owner's Claude review. `dependabot-auto-merge.yml` turns on auto-merge for the Dependabot updates that `ARCHITECTURE.md` section 6.5 names. |
 | `scripts/ci/` | Shell and tool images for CI, the deploy workflow, the local gate and the rulesets. A `*.test.sh` is next to each tested script. |
 | `deploy/` | The deploy host stack: host commands in `deploy/bin/`, `deploy/compose.prod.yml`, Postgres, Traefik, systemd units and service manifests |
 | `deploy/test/` | Tests of `deploy/`. The deploy does not ship this folder. |
@@ -131,7 +131,7 @@ Personal agent configuration comes from the setup of each runner environment, no
 - Fill in `.github/pull_request_template.md` for each PR.
 - Record a feature idea as an issue from `.github/ISSUE_TEMPLATE/feature.yml`.
 - Record a choice that a future contributor could reverse for a wrong reason as an ADR in `docs/adr/`. Use the next number and the shape of the newest ADR.
-- Never merge with `gh pr merge --admin`. Admins can bypass the rulesets, but agents must not.
+- Never merge with `gh pr merge --admin`. Admins can bypass the main ruleset in a PR merge, but agents must not.
 - `ci` and `pr-title` are the only merge gates. Merge when both pass.
 - AI reviews are advisory. Do not wait for them before a merge. The owner starts a Claude review with the `claude-review` label or a manual run of `claude-code-review.yml`.
 - CodeRabbit reviews a PR only on request: a comment `@coderabbitai review`.
