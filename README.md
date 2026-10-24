@@ -2,8 +2,6 @@
 
 This repository is the monorepo of the Afframe web apps: services in `apps/`, the PR gate in CI and the deploy host stack in `deploy/`.
 
-Status: no users.
-
 | You need | Read |
 |---|---|
 | Layout, commands, writing rules, service contract | [`AGENTS.md`](AGENTS.md) |
@@ -12,4 +10,3 @@ Status: no users.
 | Decisions and their reasons | [`docs/adr/`](docs/adr/) |
 | Starter files for a new app | [`docs/templates/app/`](docs/templates/app/README.md) |
 | How to report a vulnerability | [`SECURITY.md`](SECURITY.md) |
-
