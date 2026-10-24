@@ -13,7 +13,9 @@
 | Value | Single source | Readers use |
 |---|---|---|
 | Project name and the Docker names built from it | `name:` in `deploy/compose.prod.yml`, constants in `deploy/bin/common.sh` | `${COMPOSE_PROJECT_NAME}`, the shell constants |
-| Postgres user, database, stanza, data path | `ENV` in `deploy/postgres/Dockerfile` | the container environment |
+| Postgres user, database, stanza, data path | `ENV` in `deploy/postgres/Dockerfile` | the container environment, and `deploy/bin/vault-env` for the database |
+| App database role name | `APP_ROLE` in `deploy/bin/common.sh` | the shell constant |
+| App database password | the infra secret in Vault | `deploy/bin/vault-env`, which derives `DATABASE_URL`, and the role setup in `deploy/bin/afframe-deploy` |
 | Service host name, port, memory, migration | `deploy/services/<name>.conf` | `read_vars` |
 | Deploy target (user and host) | one repository secret | `.github/workflows/deploy.yml`, through the secret context |
 | Switches and settings such as `DEPLOY_ENABLED` and `CLAUDE_REVIEW_OWNER` | repository variable | the `vars` context |

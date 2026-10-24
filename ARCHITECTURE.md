@@ -23,6 +23,11 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 
 - Postgres runs on the deploy host from `deploy/postgres/Dockerfile`. The services reach it on the internal network `db`.
 - Postgres also joins the network `egress` to reach the backup repository. It publishes no ports.
+- Postgres has two roles. The superuser is the `POSTGRES_USER` of `deploy/postgres/Dockerfile`. The host jobs, the backups and the role setup use it.
+- Services and migrations connect as `afframe_app` through `DATABASE_URL`. This role is not a superuser. It can create objects in the schema `public`.
+- `afframe-deploy` creates `afframe_app` on each deploy, sets its password and grants its privileges before the migrations run.
+- The schema `ops` belongs to the superuser. `afframe_app` has no grant on it.
+- `docs/adr/0005-app-database-role.md` gives the reasons for the app role.
 - pgBackRest archives WAL and takes scheduled backups to the backup repository that Vault configures.
 - Each backup writes a sentinel row to `ops.heartbeat`. A failed sentinel write only warns.
 - The restore drill restores the latest backup with WAL into a throwaway container and never touches the live database.
@@ -51,7 +56,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 3. The job stops unless the commit is the merge commit of a PR into the default branch.
 4. It builds and tests the service images. A fixable critical CVE in one of them stops the deploy.
 5. It joins the tailnet with OIDC and ships the release and the tested images as the Decision in `docs/adr/0001-images-streamed-to-deploy-host.md` states. `afframe-receive` unpacks the release.
-6. `afframe-deploy` refuses a run number lower than the deployed one. It renders the credentials and starts Traefik and Postgres when their inputs changed.
+6. `afframe-deploy` refuses a run number lower than the deployed one. It renders the credentials and starts Traefik and Postgres when their inputs changed. Then it sets up the app database role.
 7. For each changed service, it runs `MIGRATE` in the new image, starts the idle colour and waits for consecutive `/health` passes.
 8. It removes the services whose manifest is gone, switches Traefik, confirms the switch through Traefik and stops the old colours.
 9. A failure before the switch switches nothing. An unconfirmed switch routes back. A failure between two route writes leaves the services already routed on their new colour, with both colours running.
@@ -188,6 +193,7 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 - Host jobs refuse to run as root. `docs/conventions.md` section Configuration names the source of the systemd user.
 - Some values repeat with a pointer comment and a test. Change every copy of the confirm port, the `afframe.tree` label, the root build inputs and the `AFFRAME_HOME` default.
 - `AFFRAME_HOME` holds the releases, `current`, the rendered env, TLS, state, the Traefik config and the Docker CLI config of the host commands. Nothing mounts from a release.
+- A new or changed app database password recreates Postgres, as each change to the infra env does. The role setup reads the password from the Postgres container environment.
 - `log/` in `AFFRAME_HOME` holds the output of infrastructure updates, migrations and failed health checks.
 - The deploy host keeps the current and the previous release, and the current and the previous image of each service.
 

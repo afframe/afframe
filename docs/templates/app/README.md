@@ -27,7 +27,7 @@ Nothing here runs in CI or in the deploy until you copy it. The templates fit a 
 | `files` | `dist` and `migrations`. `pnpm deploy` copies only these into the shipped image. |
 | Start | `CMD` of the Dockerfile. It runs `dist/main.js`. |
 | Listen | `$PORT` with no host argument. Node then listens on IPv4 and IPv6. |
-| Database | The connection URL in the variable that `compose.ci.yml.example` sets. Production gets the same name from Vault. |
+| Database | The connection URL in the variable that `compose.ci.yml.example` sets. In production, `deploy/bin/vault-env` sets it for the role `afframe_app`. |
 | TypeScript | `pnpm --filter <name> add -DE typescript@6.0.3 @types/node`. Keep the exact pin. `docs/adr/0002-typescript-6.md` gives the reason. |
 
 - A workspace package that the app uses also needs a `build` script and `files`, if it has a build output. The filtered build in the Dockerfile builds it first.
