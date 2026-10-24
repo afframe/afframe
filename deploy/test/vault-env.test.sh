@@ -50,8 +50,9 @@ check "app password in the infra env only" fails grep -q APP_DB_PASSWORD "$AFFRA
 
 render_err() { PATH="$FAKE/bin:$PATH" "$root/deploy/bin/vault-env" < /dev/null 2>&1 > /dev/null; }
 kv '{"GREETING": "hello", "DATABASE_URL": "postgres://other"}' > "$FAKE/app.json"
-check "a DATABASE_URL in the app secret gets a warning" grep -q "warning: DATABASE_URL" <<< "$(render_err)"
-check "the rendered one replaces it" test "$(grep '^DATABASE_URL=' "$AFFRAME_HOME/env/app.env")" == "$url"
+check "a DATABASE_URL in the app secret fails" fails render
+check "and names the key" grep -q "DATABASE_URL in the app secret is not allowed" <<< "$(render_err)"
+check "the derived one stays" test "$(grep '^DATABASE_URL=' "$AFFRAME_HOME/env/app.env")" == "$url"
 kv '{"GREETING": "hello"}' > "$FAKE/app.json"
 
 kv "$(jq 'del(.APP_DB_PASSWORD)' <<< "$infra")" > "$FAKE/infra.json"

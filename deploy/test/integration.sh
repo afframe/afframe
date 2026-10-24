@@ -97,11 +97,10 @@ ship() {
 # The deliberately broken image never gets healthy: give up sooner than for real images.
 ship_broken() { AFFRAME_HEALTH_TRIES="${INTEGRATION_BROKEN_HEALTH_TRIES:-3}" ship "$@"; }
 psql_prod() { psql_exec "$POSTGRES" -Atc "$1"; }
-# app_psql <sql>: as a service connects, with the rendered app env.
 app_psql() {
   # shellcheck disable=SC2016 # expanded by the container's shell
   docker run --rm --network "$DB_NETWORK" --env-file "$AFFRAME_HOME/env/app.env" "$POSTGRES:local" \
-    sh -c 'exec psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "$1"' sh "$1" 2> /dev/null
+    sh -c 'exec psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atqc "$1"' sh "$1"
 }
 drill_fails() {
   local output
@@ -229,7 +228,8 @@ psql_prod "create table drill (x int); insert into drill values (42)" > /dev/nul
 check "full backup" "$current/afframe-backup" full
 check "sentinel written" \
   test "$(psql_prod "select count(*) from ops.heartbeat where at > now() - interval '1 hour'")" -eq 1
-check "app cannot read the ops schema" fails app_psql 'select * from ops.heartbeat'
+check "app cannot read the ops schema" \
+  grep -q 'permission denied for schema ops' <<< "$(app_psql 'select * from ops.heartbeat' 2>&1)"
 psql_prod "insert into drill values (43); select pg_switch_wal()" > /dev/null
 check "diff backup" "$current/afframe-backup" diff
 check "health ok" "$current/afframe-health"

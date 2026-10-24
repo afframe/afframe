@@ -33,6 +33,8 @@ echo "docker $*" >> "$FAKE/calls"
 echo "${DOCKER_CONFIG:-unset}" >> "$FAKE/configs"
 # Role setup: its SQL goes to $FAKE/sql. $FAKE/role=fail: psql fails.
 if [[ "$1 $2" == "exec -i" ]]; then cat > "$FAKE/sql"; [[ "$(cat "$FAKE/role")" != fail ]]; exit; fi
+# $FAKE/ready=fail: Postgres never accepts connections.
+if [[ "$1" == exec && "$*" == *" pg_isready"* ]]; then [[ "$(cat "$FAKE/ready")" != fail ]]; exit; fi
 [[ "$1" != compose ]] || echo "traefik-hash ${AFFRAME_TRAEFIK_HASH:-}" >> "$FAKE/calls"
 # Output that must stay on the host: <kind>-secret.
 [[ "$1" != compose ]] || echo "compose-secret"
@@ -134,6 +136,7 @@ echo ok > "$FAKE/switch"
 echo none > "$FAKE/barrier"
 echo true > "$FAKE/infra"
 echo ok > "$FAKE/role"
+echo ok > "$FAKE/ready"
 printf 'A=1\nAPP_DB_PASSWORD=pw-secret-789\n' > "$FAKE/infra.env"
 
 n=0 # the workflow run number, one up per deploy
@@ -254,6 +257,11 @@ check "role setup creates afframe_app" grep -q "CREATE ROLE afframe_app" "$FAKE/
 check "as a login without superuser" grep -q "ALTER ROLE afframe_app LOGIN NOSUPERUSER" "$FAKE/sql"
 check "password from the container environment" grep -qxF "\\getenv pw APP_DB_PASSWORD" "$FAKE/sql"
 check "role setup before the new container" before "exec -i afframe-postgres" "create --name"
+check "Postgres readiness checked before the role setup" \
+  before "exec afframe-postgres pg_isready" "exec -i afframe-postgres"
+sql_line() { grep -n -- "$1" "$FAKE/sql" | head -n 1 | cut -d: -f1; }
+check "server error log off before the password statement" \
+  test "$(sql_line "SET log_min_error_statement")" -lt "$(sql_line "ALTER ROLE")"
 check "app password not in a docker call" fails called pw-secret-789
 check "nor in the SQL" fails grep -q pw-secret-789 "$FAKE/sql"
 check "nor in the job log" fails printed pw-secret-789
@@ -376,6 +384,10 @@ fails_naming "a failed role setup fails the deploy" "log/app-role.log" dep migra
 check "no migration after a failed role setup" fails called "migrate up"
 check "no new container after a failed role setup" fails called "create --name"
 echo ok > "$FAKE/role"
+echo fail > "$FAKE/ready"
+fails_naming "Postgres that never gets ready fails the deploy" "Postgres not ready" dep migrated=2
+check "no role setup when Postgres is not ready" fails called "exec -i afframe-postgres"
+echo ok > "$FAKE/ready"
 
 echo fail > "$FAKE/remove"
 check "deploy succeeds when the old colour cannot be removed" dep migrated=3

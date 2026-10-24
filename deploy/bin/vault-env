@@ -30,7 +30,8 @@ app="$(read_kv app)" || die "cannot read the app secret"
 jq -e '.APP_DB_PASSWORD | strings | length > 0' <<< "$infra" > /dev/null || die "APP_DB_PASSWORD missing in infra"
 db="$(sed -n 's/.*[[:space:]]POSTGRES_DB=\([^[:space:]]*\).*/\1/p' "$REPO/deploy/postgres/Dockerfile")"
 [[ -n "$db" ]] || die "no POSTGRES_DB in deploy/postgres/Dockerfile"
-! jq -e 'has("DATABASE_URL")' <<< "$app" > /dev/null || echo "warning: DATABASE_URL in app is replaced" >&2
+! jq -e 'has("DATABASE_URL")' <<< "$app" > /dev/null \
+  || die "DATABASE_URL in the app secret is not allowed; vault-env derives it"
 # Both secrets go to jq on stdin, never on its command line, where `ps` would show them.
 app="$(printf '%s\n%s\n' "$infra" "$app" | jq -s --arg role "$APP_ROLE" --arg host "$POSTGRES" --arg db "$db" \
   '.[1] + {DATABASE_URL: "postgres://\($role):\(.[0].APP_DB_PASSWORD | @uri)@\($host):5432/\($db)"}')"
