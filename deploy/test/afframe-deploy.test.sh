@@ -31,6 +31,8 @@ cat > "$FAKE/bin/docker" <<'FAKEDOCKER'
 #!/usr/bin/env bash
 echo "docker $*" >> "$FAKE/calls"
 echo "${DOCKER_CONFIG:-unset}" >> "$FAKE/configs"
+# Role setup: its SQL goes to $FAKE/sql. $FAKE/role=fail: psql fails.
+if [[ "$1 $2" == "exec -i" ]]; then cat > "$FAKE/sql"; [[ "$(cat "$FAKE/role")" != fail ]]; exit; fi
 [[ "$1" != compose ]] || echo "traefik-hash ${AFFRAME_TRAEFIK_HASH:-}" >> "$FAKE/calls"
 # Output that must stay on the host: <kind>-secret.
 [[ "$1" != compose ]] || echo "compose-secret"
@@ -131,7 +133,8 @@ echo ok > "$FAKE/migrate"
 echo ok > "$FAKE/switch"
 echo none > "$FAKE/barrier"
 echo true > "$FAKE/infra"
-echo A=1 > "$FAKE/infra.env"
+echo ok > "$FAKE/role"
+printf 'A=1\nAPP_DB_PASSWORD=pw-secret-789\n' > "$FAKE/infra.env"
 
 n=0 # the workflow run number, one up per deploy
 # stream <service>=<version>[@<tree>]...: the fake `docker save` stream; tree defaults to version.
@@ -246,6 +249,14 @@ check "host log readable by the deploy user only" mode compose-up.log 600
 check "host log folder too" mode . 700
 check "vault-env output kept out of the job log" fails printed vault-secret
 check "kept on the host" kept vault-secret vault-env.log
+check "app role set up in Postgres with ON_ERROR_STOP" called "exec -i afframe-postgres .*ON_ERROR_STOP=1"
+check "role setup creates afframe_app" grep -q "CREATE ROLE afframe_app" "$FAKE/sql"
+check "as a login without superuser" grep -q "ALTER ROLE afframe_app LOGIN NOSUPERUSER" "$FAKE/sql"
+check "password from the container environment" grep -qxF "\\getenv pw APP_DB_PASSWORD" "$FAKE/sql"
+check "role setup before the new container" before "exec -i afframe-postgres" "create --name"
+check "app password not in a docker call" fails called pw-secret-789
+check "nor in the SQL" fails grep -q pw-secret-789 "$FAKE/sql"
+check "nor in the job log" fails printed pw-secret-789
 check "Traefik static config copied to AFFRAME_HOME" \
   cmp -s "$AFFRAME_HOME/traefik/traefik.yml" "$root/deploy/traefik/traefik.yml"
 check "confirm router names its backend in a response header" \
@@ -333,6 +344,7 @@ check "migration ran in the new image" \
   called "run --rm --name afframe-migrated-migrate --network afframe-db --env-file $AFFRAME_HOME/env/app.env \
 --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 $(img migrated 1) migrate up"
 check "migration before the new container" before "migrate up" "create --name afframe-migrated-blue"
+check "role setup before the migration" before "exec -i afframe-postgres" "migrate up"
 check "migration container gone" fails exists afframe-migrated-migrate
 check "migration output kept out of the job log" fails printed migration-secret
 check "kept on the host" kept migration-secret afframe-migrated-migrate.log
@@ -358,6 +370,12 @@ check "a migration log that cannot be written fails the deploy" fails dep migrat
 check "the job log names the host log" printed "cannot write log/afframe-migrated-migrate.log"
 check "and does not claim the migration failed" fails printed "migration failed"
 rmdir "$AFFRAME_HOME/log/afframe-migrated-migrate.log"
+
+echo fail > "$FAKE/role"
+fails_naming "a failed role setup fails the deploy" "log/app-role.log" dep migrated=2
+check "no migration after a failed role setup" fails called "migrate up"
+check "no new container after a failed role setup" fails called "create --name"
+echo ok > "$FAKE/role"
 
 echo fail > "$FAKE/remove"
 check "deploy succeeds when the old colour cannot be removed" dep migrated=3

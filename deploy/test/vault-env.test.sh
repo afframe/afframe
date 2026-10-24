@@ -16,12 +16,16 @@ cat > "$FAKE/bin/curl" <<'FAKECURL'
 echo "$*" >> "$FAKE/args"
 case " $* " in *" -H @- "*) cat >> "$FAKE/stdin" ;; esac
 case "${*: -1}" in
-  */infra) echo '{"data": {"data": {"SAMPLE_KEY": "pw", "ORIGIN_CERT_PEM": "cert", "ORIGIN_KEY_PEM": "key"}}}' ;;
-  */app) echo '{"data": {"data": {"GREETING": "hello"}}}' ;;
+  */infra) cat "$FAKE/infra.json" ;;
+  */app) cat "$FAKE/app.json" ;;
   *) exit 22 ;;
 esac
 FAKECURL
 chmod +x "$FAKE/bin/curl"
+infra='{"SAMPLE_KEY": "pw", "APP_DB_PASSWORD": "p@ss/w%rd", "ORIGIN_CERT_PEM": "cert", "ORIGIN_KEY_PEM": "key"}'
+kv() { echo "{\"data\": {\"data\": $1}}"; }
+kv "$infra" > "$FAKE/infra.json"
+kv '{"GREETING": "hello"}' > "$FAKE/app.json"
 
 check() {
   local name="$1"
@@ -40,6 +44,22 @@ check "infra env" grep -qx SAMPLE_KEY=pw "$AFFRAME_HOME/env/infra.env"
 check "app env" grep -qx GREETING=hello "$AFFRAME_HOME/env/app.env"
 check "origin key" grep -qx key "$AFFRAME_HOME/tls/origin.key"
 check "KV path from AFFRAME_VAULT_KV_PREFIX" grep -q " http://vault.test/v1/kv/data/test/app$" "$FAKE/args"
+url='DATABASE_URL=postgres://afframe_app:p%40ss%2Fw%25rd@afframe-postgres:5432/afframe'
+check "database URL for the app role, password encoded" grep -qxF "$url" "$AFFRAME_HOME/env/app.env"
+check "app password in the infra env only" fails grep -q APP_DB_PASSWORD "$AFFRAME_HOME/env/app.env"
+
+render_err() { PATH="$FAKE/bin:$PATH" "$root/deploy/bin/vault-env" < /dev/null 2>&1 > /dev/null; }
+kv '{"GREETING": "hello", "DATABASE_URL": "postgres://other"}' > "$FAKE/app.json"
+check "a DATABASE_URL in the app secret gets a warning" grep -q "warning: DATABASE_URL" <<< "$(render_err)"
+check "the rendered one replaces it" test "$(grep '^DATABASE_URL=' "$AFFRAME_HOME/env/app.env")" == "$url"
+kv '{"GREETING": "hello"}' > "$FAKE/app.json"
+
+kv "$(jq 'del(.APP_DB_PASSWORD)' <<< "$infra")" > "$FAKE/infra.json"
+check "missing APP_DB_PASSWORD fails" fails render
+check "and names the key" grep -q "APP_DB_PASSWORD missing in infra" <<< "$(render_err)"
+kv '{"APP_DB_PASSWORD": "", "ORIGIN_CERT_PEM": "cert", "ORIGIN_KEY_PEM": "key"}' > "$FAKE/infra.json"
+check "empty APP_DB_PASSWORD fails" fails render
+kv "$infra" > "$FAKE/infra.json"
 
 printf 'VAULT_ADDR=http://vault.test\nAFFRAME_VAULT_KV_PREFIX=kv/data/host\n' > "$AFFRAME_HOME/host.conf"
 echo tok-file-456 > "$AFFRAME_HOME/vault-token"
