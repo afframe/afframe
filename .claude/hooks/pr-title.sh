@@ -16,6 +16,11 @@ if [[ "$tool" == Bash ]]; then
   [[ "$command" =~ $start ]] || exit 0
   action="${BASH_REMATCH[4]}"
   rest="${command#*"${BASH_REMATCH[0]}"}"
+  # An odd quote count before the match means the gh call sits inside a quoted string.
+  prefix="${command%%"${BASH_REMATCH[0]}"*}"
+  dq="${prefix//[^\"]/}"
+  sq="${prefix//[^\']/}"
+  (( ${#dq} % 2 == 0 && ${#sq} % 2 == 0 )) || exit 0
   # Keep only this gh call: stop at the first separator outside quotes.
   segment="^([^;&|\"$q$nl]|\"[^\"]*\"|${q}[^${q}]*${q})*"
   [[ "$rest" =~ $segment ]] || exit 0
