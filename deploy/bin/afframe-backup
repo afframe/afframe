@@ -17,8 +17,14 @@ fi
 log "heartbeat sentinel"
 psql_exec "$POSTGRES" -q -v ON_ERROR_STOP=1 -c "
   set client_min_messages = warning;
-  create schema if not exists ops;
-  create table if not exists ops.heartbeat (id int primary key, at timestamptz not null);
+  -- An ops schema or table that the app role owns could run a trigger as the superuser.
+  do \$\$ declare me oid := (select oid from pg_roles where rolname = current_user); begin
+    if (select nspowner from pg_namespace where nspname = 'ops') is distinct from me
+      or (select c.relowner from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'ops' and c.relname = 'heartbeat') is distinct from me then
+      raise exception 'ops or ops.heartbeat is missing or not owned by %', current_user;
+    end if;
+  end \$\$;
   insert into ops.heartbeat values (1, now()) on conflict (id) do update set at = excluded.at" \
   || echo "warning: ops.heartbeat sentinel not written; the restore drill will report stale data" >&2
 code=0

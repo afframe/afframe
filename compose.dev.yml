@@ -3,6 +3,8 @@ services:
   postgres:
     build: deploy/postgres
     mem_limit: 512m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       POSTGRES_HOST_AUTH_METHOD: trust # dev only: the port binds to localhost
     ports:

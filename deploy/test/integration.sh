@@ -194,6 +194,11 @@ check "app role is not a superuser" \
 check "app connects with DATABASE_URL and owns what it creates" test "$(app_psql \
   "create table app_check (x int); select tableowner from pg_tables where tablename = 'app_check'")" == afframe_app
 psql_prod "drop table if exists app_check" > /dev/null
+check "app role has no CREATE on the ops schema" \
+  test "$(psql_prod "select has_schema_privilege('afframe_app', 'ops', 'CREATE')")" == f
+check "superuser owns the ops schema" \
+  test "$(psql_prod "select nspowner::regrole::text from pg_namespace where nspname = 'ops'")" \
+  == "$(docker exec "$POSTGRES" printenv POSTGRES_USER)"
 # The local backup repository needs no TLS. An S3 repository fails without this bundle.
 check "Postgres trusts public certificate authorities" \
   docker exec "$POSTGRES" test -s /etc/ssl/certs/ca-certificates.crt

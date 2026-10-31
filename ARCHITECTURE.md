@@ -11,13 +11,23 @@ PR ──► required checks (ci, pr-title) ──squash merge──► main ─
 
 deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service containers
               Postgres + pgBackRest ──► backup repository
-              systemd host jobs ──► heartbeat monitor
+              systemd host jobs ──► heartbeat monitor, alert endpoint
               Vault ──► runtime credentials and config
 ```
 
 ## 3. Core Components
 
 - Traefik routes from files only, with no Docker socket. `afframe-deploy` writes one route file per service.
+- Traefik redirects HTTP to HTTPS. `sniStrict` in `deploy/traefik/dynamic/tls.yml` refuses a TLS handshake for a host name with no certificate.
+- Traefik and the service containers share the network `edge`.
+- `deploy/bin/afframe-receive` unpacks a release from `git archive` on stdin. It needs only `sh` and `tar`.
+- `deploy/bin/afframe-deploy` deploys and rolls back the services, as sections 6.1 and 6.2 state.
+- `deploy/bin/vault-env` renders the env files and the origin certificate from Vault. It writes no `*_PEM` key to an env file, and it refuses multi-line values.
+- `deploy/bin/afframe-backup` takes a full or a differential backup. Its `Usage:` line gives the default type.
+- `deploy/bin/afframe-health` checks disk, memory, the container states, the age of the last backup, WAL archiving and the Vault credential expiry. It holds the thresholds.
+- `deploy/bin/afframe-restore-drill` runs the restore drill of section 4.
+- `deploy/host/systemd/afframe@.service` runs one host command. `afframe-backup.timer`, `afframe-health.timer` and `afframe-restore-drill.timer` in that folder set the schedules.
+- A host job pings its heartbeat URL. A failed host job also posts to the alert endpoint. `heartbeat` in `deploy/bin/common.sh` sends both.
 
 ## 4. Data Stores
 
@@ -25,8 +35,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 - Postgres also joins the network `egress` to reach the backup repository. It publishes no ports.
 - Postgres has two roles. The superuser is the `POSTGRES_USER` of `deploy/postgres/Dockerfile`. The host jobs, the backups and the role setup use it.
 - Services and migrations connect as the app role (`APP_ROLE` in `deploy/bin/common.sh`).
-- `afframe-deploy` creates the app role when it is absent. It sets the password of the role on each deploy, before the migrations run.
-- `docs/adr/0005-app-database-role.md` gives the privileges of the app role and their reasons.
+- `docs/adr/0005-app-database-role.md` gives the privileges of the app role, its setup on each deploy and their reasons.
 - pgBackRest archives WAL and takes scheduled backups to the backup repository that Vault configures.
 - Each backup writes a sentinel row to `ops.heartbeat`. A failed sentinel write only warns.
 - The restore drill restores the latest backup with WAL into a throwaway container and never touches the live database.
@@ -42,6 +51,9 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 | Cloudflare proxy and origin certificate | `deploy/traefik/` |
 | Backup repository | Vault |
 | Heartbeat monitor | Vault |
+| Alert endpoint | Vault |
+| GitHub Actions build cache | `scripts/ci/build-images.sh` |
+| Trivy vulnerability database | the Trivy default, in each run of `scripts/ci/image-scan.sh` |
 | CodeRabbit | `.coderabbit.yaml` |
 | Claude Code action | `.github/workflows/claude-code-review.yml` |
 | Dependabot | `.github/dependabot.yml` |
@@ -55,7 +67,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 3. The job stops unless the commit is the merge commit of a PR into the default branch.
 4. It builds and tests the service images. A fixable critical CVE in one of them stops the deploy.
 5. It joins the tailnet with OIDC and ships the release and the tested images as the Decision in `docs/adr/0001-images-streamed-to-deploy-host.md` states. `afframe-receive` unpacks the release.
-6. `afframe-deploy` refuses a run number lower than the deployed one. It renders the credentials and starts Traefik and Postgres when their inputs changed. Then it sets up the app database role.
+6. `afframe-deploy` refuses a run number lower than the deployed one. Then it loads the images. It renders the credentials and starts Traefik and Postgres when their inputs changed. Then it sets up the app database role.
 7. For each changed service, it runs `MIGRATE` in the new image, starts the idle colour and waits for consecutive `/health` passes.
 8. It removes the services whose manifest is gone, switches Traefik, confirms the switch through Traefik and stops the old colours.
 9. A failure before the switch switches nothing. An unconfirmed switch routes back. A failure between two route writes leaves the services already routed on their new colour, with both colours running.
@@ -73,9 +85,9 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 - Run the other host commands on the deploy host as the user of the host jobs. `$INTERNAL/afframe-deploy.md` describes the deploy host.
 - Export `AFFRAME_HOME` with the default in `deploy/bin/common.sh`. `deploy/host/systemd/afframe@.service` uses that path.
 - Run the `gh` commands on a workstation.
-- `deploy/test/integration.sh` runs steps 2 to 5 and 7 of the first procedure on its test stack, with a local backup repository.
+- `deploy/test/integration.sh` runs steps 2 to 5 and 7 of the point-in-time restore on its test stack, with a local backup repository. It also runs `stanza-create` on the restored database.
 
-#### Restore the running deploy host to a point in time
+### Restore the running deploy host to a point in time
 
 1. Note the value of `DEPLOY_ENABLED` and stop the deploys. `gh variable get` fails when the variable is unset. Unset is a valid value to note. Wait until `gh run list` shows no queued or running Deploy run:
 
@@ -99,7 +111,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
    docker exec afframe-postgres pgbackrest info
    ```
 
-3. Stop Postgres. The services get database errors until step 5 ends. A shorter timeout can kill Postgres. A killed Postgres leaves `postmaster.pid`, and pgBackRest refuses to restore. If this occurs, start Postgres, wait for it, and stop it again with the timeout.
+3. Stop Postgres with the timeout below. The services get database errors until step 5 ends. A shorter timeout can kill Postgres and leave a `postmaster.pid` that stops the restore. If this occurs, start Postgres, wait for it, and stop it again.
 
    ```sh
    docker stop --time 120 afframe-postgres
@@ -146,25 +158,25 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 
    If a Deploy run after the target time ran a migration, the code expects a newer schema. Roll that service back as section 6.2 states, or run its `MIGRATE` again.
 
-#### Restore onto a rebuilt deploy host
+### Restore onto a rebuilt deploy host
 
-The first release starts Postgres and creates the stanza. `stanza-create` needs a primary, and it must find the restored database. Thus the restore runs before the first deploy, and the recovery ends before it.
+The restore runs before the first deploy, and the recovery ends before it. The `stanza-create` of the first release needs a primary that holds the restored database.
 
-1. Turn off the deploys as in step 1 of the first procedure. Make sure that Postgres on the old deploy host is stopped. Then do the host setup in `$INTERNAL/afframe-deploy.md`. Do not run a deploy. If the host setup started the timers, stop them as in step 1 of the first procedure.
-2. Copy the `deploy/` folder of `main` to the deploy host. On a workstation, in a checkout of `main`:
+1. Turn off the deploys as in step 1 of the point-in-time restore. Make sure that Postgres on the old deploy host is stopped. Then do the host setup in `$INTERNAL/afframe-deploy.md`. Do not run a deploy. If the host setup started the timers, stop them as in step 1 of the point-in-time restore.
+2. Copy the `deploy/` folder of `main` to the deploy host. The operator chooses the `<restore folder>`. On a workstation, in a checkout of `main`:
 
    ```sh
-   git archive HEAD deploy | ssh <user of the host jobs>@<deploy host> 'mkdir -p afframe-restore && tar -x -C afframe-restore'
+   git archive HEAD deploy | ssh <user of the host jobs>@<deploy host> 'mkdir -p <restore folder> && tar -x -C <restore folder>'
    ```
 
 3. On the deploy host, render the credentials. Then build the Postgres image and create its container and volumes. Compose does not start Postgres.
 
    ```sh
-   ~/afframe-restore/deploy/bin/vault-env
-   docker compose -p afframe -f ~/afframe-restore/deploy/compose.prod.yml up --no-start --build postgres
+   <restore folder>/deploy/bin/vault-env
+   docker compose -p afframe -f <restore folder>/deploy/compose.prod.yml up --no-start --build postgres
    ```
 
-4. Do step 4 of the first procedure without the options `--delta`, `--type`, `--target` and `--target-action`. pgBackRest then restores the newest backup and all archived WAL.
+4. Do step 4 of the point-in-time restore without the options `--delta`, `--type`, `--target` and `--target-action`. pgBackRest then restores the newest backup and all archived WAL.
 5. Start Postgres and wait until the recovery ends. Postgres does not pause, because the restore has no target.
 
    ```sh
@@ -173,11 +185,11 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
    ```
 
 6. Turn on the deploys and run the Deploy workflow. The first release takes over the restored Postgres, and `stanza-create` accepts it.
-7. Take a full backup as in step 7 of the first procedure. Start the timers with the `systemctl start` command of step 8 of the first procedure.
+7. Take a full backup as in step 7 of the point-in-time restore. Start the timers with the `systemctl start` command of its step 8.
 8. Remove the working copy from step 2:
 
    ```sh
-   rm -rf ~/afframe-restore
+   rm -rf <restore folder>
    ```
 
 ### 6.4 Facts that prevent wrong changes
@@ -187,24 +199,28 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 - One run waits per concurrency group. A newer push replaces a waiting run, and also a waiting rollback.
 - An image with the same non-empty `afframe.tree` label as the live image does not deploy. An image without the label always deploys.
 - A change to `packages/` or a root workspace file gives every app a new label, so every app deploys. `label_of` in `scripts/ci/build-images.sh` lists these inputs.
+- A change to `deploy/services/<name>.conf` gives that app a new label, so a change to the manifest alone deploys the app.
 - Dependabot base-image updates change the tree, so they deploy. An unpinned upgrade inside a Dockerfile ships only with a source change.
 - `afframe-deploy` refuses a service name that has a file in `deploy/traefik/dynamic/`, because route files share that folder.
 - Host jobs refuse to run as root. `docs/conventions.md` section Configuration names the source of the systemd user.
 - Some values repeat with a pointer comment and a test. Change every copy of the confirm port, the `afframe.tree` label, the root build inputs and the `AFFRAME_HOME` default.
-- `AFFRAME_HOME` holds the releases, `current`, the rendered env, TLS, state, the Traefik config and the Docker CLI config of the host commands. Nothing mounts from a release.
+- `AFFRAME_HOME` holds the releases, `current`, the rendered env, TLS, state and the Traefik config. It also holds the Docker CLI config of the host commands, `deploy.lock` and the Vault files of `docs/conventions.md` section Configuration. Nothing mounts from a release.
+- One `afframe-deploy` runs at a time. It holds an `flock` on `deploy.lock`, and a second run stops.
 - A new or changed app database password recreates Postgres, as each change to the infra env does. The role setup reads the password from the Postgres container environment.
 - `log/` in `AFFRAME_HOME` holds the output of infrastructure updates, migrations and failed health checks.
 - The deploy host keeps the current and the previous release, and the current and the previous image of each service.
+- `afframe-deploy` prunes the old Docker build cache. `deploy/bin/afframe-deploy` holds the age limit.
 
 ### 6.5 CI and rulesets
 
 - `.github/workflows/ci.yml` runs lint, build and the deploy integration test as parallel jobs. The `ci` check passes when each of them passes or skips.
 - On a PR, the deploy integration test runs only when deploy files changed.
-- On a PR, the deploy unit tests run only when `deploy/` or `scripts/ci/` changed.
+- On a PR, the tests in `deploy/test/` run only when `deploy/` or `scripts/ci/` changed. Every other `*.test.sh` runs on each PR.
 - A scheduled `ci` run builds and tests everything. `on.schedule` in `.github/workflows/ci.yml` sets the schedule.
 - `ci` builds and tests every app when `packages/`, a root workspace file or a shared CI input changed. The `shared` pattern in `scripts/ci/ci-changes.sh` lists these inputs.
 - `.github/workflows/security.yml` scans the pinned Traefik image and fresh builds of the Postgres image and each deployable service on a schedule.
-- `.github/rulesets/main.json` requires PRs, the checks `ci` and `pr-title`, squash merge, linear history and signed commits. `scripts/ci/rulesets.sh` compares them with GitHub or applies them. A merge does not apply them. The squash commit title setting stays `PR_TITLE`, because the `pr-title` check validates the PR title.
+- `ci` and the deploy fail on a fixable critical CVE. The scheduled scan also fails on a fixable high CVE. `scripts/ci/image-scan.sh` ignores CVEs with no fix.
+- `.github/rulesets/main.json` requires PRs, the checks `ci` and `pr-title`, squash merge, linear history and signed commits. It blocks deletion and force-push. The admin role can bypass it only in a PR merge. `scripts/ci/rulesets.sh` compares them with GitHub or applies them. A merge does not apply them. The squash commit title setting stays `PR_TITLE`, because the `pr-title` check validates the PR title.
 - `.github/rulesets/tags.json` protects `v*` tags from deletion and force-push, and requires linear history and signed commits.
 - `.github/workflows/dependabot-auto-merge.yml` turns on auto-merge for patch and minor Dependabot updates of the CI toolbox and the test images, except the runner image. Deployed images never auto-merge.
 
@@ -224,6 +240,15 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 | CVE scanner version | `scripts/ci/trivy/Dockerfile` |
 | CodeGraph and pnpm versions | `package.json` |
 
+| Environment input of the host commands | Read by |
+|---|---|
+| `AFFRAME_HOME` | `deploy/bin/common.sh`, `deploy/bin/afframe-receive` and `deploy/compose.prod.yml` |
+| `AFFRAME_HTTP_PORT`, `AFFRAME_HTTPS_PORT` | `deploy/compose.prod.yml`, and `infra_hash` in `deploy/bin/afframe-deploy` |
+| `AFFRAME_HEALTH_TRIES`, `AFFRAME_HEALTH_PASSES`, `AFFRAME_MIGRATE_TIMEOUT`, `AFFRAME_MIGRATE_KILL_AFTER`, `AFFRAME_SWITCH_TIMEOUT` | `deploy/bin/afframe-deploy` |
+| `AFFRAME_MAX_DISK_PERCENT`, `AFFRAME_MIN_MEMORY_PERCENT`, `AFFRAME_MIN_VAULT_DAYS` | `deploy/bin/afframe-health` |
+| `AFFRAME_VAULT_KV_PREFIX` | `deploy/bin/vault-env`, from the environment or `host.conf` |
+| `AFFRAME_ALLOW_ROOT` | `refuse_root` in `deploy/bin/common.sh`, for tests only |
+
 ## 7. Security Considerations
 
 - `scripts/ci/repo-lint.sh` runs gitleaks over the full history.
@@ -242,9 +267,9 @@ The first release starts Postgres and creates the stanza. `stanza-create` needs 
 ## 9. Known Limits
 
 - Detection limits of the image scans: `$INTERNAL/security-limits.md`.
-- A service keeps the connection URL of its start. A rotation of the app database password needs every service recreated. Rotate it with a deploy that changes every image.
-- No test runs the restore onto a rebuilt deploy host. `deploy/test/integration.sh` runs only the restore of the running deploy host.
-- A deploy with unchanged images does not recreate the service containers. A rotated app credential reaches them only with the next image change or a rollback.
+- No test runs the restore onto a rebuilt deploy host. `deploy/test/integration.sh` runs only the point-in-time restore and `stanza-create` on its result.
+- A deploy with unchanged images does not recreate the service containers. A rotated app credential or app database password reaches a service only with its next image change or a rollback.
+- Rotate the app database password with a deploy that changes every image.
 
 ## 10. Project Identification
 

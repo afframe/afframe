@@ -1,10 +1,8 @@
 # Afframe
 
-This repository is the monorepo of the Afframe web apps: services in `apps/`, the PR gate in CI and the deploy host stack in `deploy/`.
-
 | You need | Read |
 |---|---|
-| Layout, commands, writing rules, service contract | [`AGENTS.md`](AGENTS.md) |
+| Layout, commands, agent sessions, CodeGraph, writing rules, service contract, database changes | [`AGENTS.md`](AGENTS.md) |
 | Components, data flow, deploy, value sources | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | Naming rules, the source of each value and the place of each document | [`docs/conventions.md`](docs/conventions.md) |
 | Decisions and their reasons | [`docs/adr/`](docs/adr/) |

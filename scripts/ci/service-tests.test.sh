@@ -8,7 +8,8 @@ trap 'rm -rf "$tmp"' EXIT
 failures=0
 
 # The fake docker logs every call, lists $SERVICES for `config --services`, prints $CONFIG for
-# `config --format json` and exits with $TEST_EXIT for `run --rm test`.
+# `config --format json` and exits with $MIGRATE_EXIT for `run --rm migrate` and with $TEST_EXIT
+# for `run --rm test`.
 mkdir -p "$tmp/bin"
 cat > "$tmp/bin/docker" <<'FAKE'
 #!/usr/bin/env bash
@@ -16,6 +17,7 @@ echo "docker $*" >> calls
 case "$*" in
   *"config --services") printf '%s\n' $SERVICES ;;
   *"config --format json") printf '%s' "$CONFIG" ;;
+  *"run --rm migrate") exit "${MIGRATE_EXIT:-0}" ;;
   *"run --rm test") exit "${TEST_EXIT:-0}" ;;
 esac
 FAKE
@@ -69,6 +71,12 @@ expect "test failure still cleans up" "down -v --rmi local" "$out"
 expect "test failure prints the service logs" \
   $'run --rm test\ndocker compose -p ci-1 -f compose.ci.yml logs --no-color' "$out"
 expect "and cleans up after them" $'logs --no-color\ndocker compose -p ci-1 -f compose.ci.yml down' "$out"
+
+out="$(MIGRATE_EXIT=3 run_tests "postgres migrate test" 0)"
+expect "migrate failure fails" "exit 3" "$out"
+expect "migrate failure runs no test" "!run --rm test" "$out"
+expect "migrate failure prints the service logs" "logs --no-color" "$out"
+expect "migrate failure still cleans up" "down -v --rmi local" "$out"
 
 out="$(run_tests "app test" 0 "apps/app=afframe/app:ci-1")"
 expect "prebuilt image under compose's default name" "docker tag afframe/app:ci-1 ci-1-app" "$out"

@@ -72,6 +72,10 @@ commit apps/a/package.json docs/packages/x > /dev/null
 expect "an app's package.json or a packages/ name elsewhere is not shared" \
   "services=[$a] tests=true integration=false deploy_tests=false " "$prev"
 prev="$(git -C "$repo" rev-parse HEAD)"
+commit deploy/services/a.conf > /dev/null
+expect "conf-only change builds its service" "services=[$a] tests=true integration=true deploy_tests=true " "$prev"
+git -C "$repo" rm -q deploy/services/a.conf && git -C "$repo" commit -q -m rm
+prev="$(git -C "$repo" rev-parse HEAD)"
 git -C "$repo" mv apps/a/package.json docs/package.json && git -C "$repo" commit -q -m mv
 expect "a rename out of an app changes the app" "services=[$a] tests=true integration=false deploy_tests=false " "$prev"
 expect "all builds everything and runs integration" \
@@ -80,6 +84,14 @@ expect "empty base means all" "services=[$a,$b] tests=true integration=true depl
 expect "base unknown to git means all" \
   "services=[$a,$b] tests=true integration=true deploy_tests=true " "$(printf 'f%.0s' {1..40})"
 
+commit deploy/services/z.conf > /dev/null
+if (cd "$repo" && bash "$script" all > /dev/null 2>&1); then
+  echo "FAIL: conf without an app fails"
+  failures=$((failures + 1))
+else
+  echo "ok: conf without an app fails"
+fi
+git -C "$repo" rm -q deploy/services/z.conf && git -C "$repo" commit -q -m rm
 git -C "$repo" rm -q compose.ci.yml && git -C "$repo" commit -q -m rm
 expect "no compose.ci.yml: no tests" "services=[$a,$b] tests=false integration=true deploy_tests=true " all
 commit deploy/services/a.conf > /dev/null

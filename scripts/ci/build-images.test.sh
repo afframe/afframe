@@ -58,6 +58,13 @@ for path in $inputs .dockerignore; do
   prev="$now"
 done
 expect "same commit, same label" "$prev" "$(label a)"
+change deploy/services/b.conf
+expect "another service's manifest keeps the label" "$prev" "$(label a)"
+change deploy/services/a.conf
+now="$(label a)"
+expect "a manifest change gives a new label" yes "$([[ "$now" != "$prev" ]] && echo yes)"
+change README.md
+expect "an unchanged manifest keeps the label" "$now" "$(label a)"
 (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" bash "$script" t1 c > /dev/null 2>&1)
 expect "unknown service fails before a build" "1 no" "$? $(grep -q 'proj/c' "$tmp/calls" && echo yes || echo no)"
 (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" bash "$script" t1 > /dev/null 2>&1)

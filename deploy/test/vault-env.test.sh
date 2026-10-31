@@ -16,8 +16,8 @@ cat > "$FAKE/bin/curl" <<'FAKECURL'
 echo "$*" >> "$FAKE/args"
 case " $* " in *" -H @- "*) cat >> "$FAKE/stdin" ;; esac
 case "${*: -1}" in
-  */infra) cat "$FAKE/infra.json" ;;
-  */app) cat "$FAKE/app.json" ;;
+  */infra) [[ ! -e "$FAKE/fail-infra" ]] || exit 22; cat "$FAKE/infra.json" ;;
+  */app) [[ ! -e "$FAKE/fail-app" ]] || exit 22; cat "$FAKE/app.json" ;;
   *) exit 22 ;;
 esac
 FAKECURL
@@ -47,6 +47,14 @@ check "KV path from AFFRAME_VAULT_KV_PREFIX" grep -q " http://vault.test/v1/kv/d
 url='DATABASE_URL=postgres://afframe_app:p%40ss%2Fw%25rd@afframe-postgres:5432/afframe'
 check "database URL for the app role, password encoded" grep -qxF "$url" "$AFFRAME_HOME/env/app.env"
 check "app password in the infra env only" fails grep -q APP_DB_PASSWORD "$AFFRAME_HOME/env/app.env"
+check "no PEM key in the infra env" fails grep -q _PEM "$AFFRAME_HOME/env/infra.env"
+check "no PEM key in the app env" fails grep -q _PEM "$AFFRAME_HOME/env/app.env"
+mode() { test "$(stat -c %a "$1")" == 600; }
+if stat -c %a / > /dev/null 2>&1; then
+  check "infra env readable by the deploy user only" mode "$AFFRAME_HOME/env/infra.env"
+  check "app env readable by the deploy user only" mode "$AFFRAME_HOME/env/app.env"
+  check "origin key readable by the deploy user only" mode "$AFFRAME_HOME/tls/origin.key"
+fi
 
 render_err() { PATH="$FAKE/bin:$PATH" "$root/deploy/bin/vault-env" < /dev/null 2>&1 > /dev/null; }
 kv '{"GREETING": "hello", "DATABASE_URL": "postgres://other"}' > "$FAKE/app.json"
@@ -61,6 +69,25 @@ check "and names the key" grep -q "APP_DB_PASSWORD missing in infra" <<< "$(rend
 kv '{"APP_DB_PASSWORD": "", "ORIGIN_CERT_PEM": "cert", "ORIGIN_KEY_PEM": "key"}' > "$FAKE/infra.json"
 check "empty APP_DB_PASSWORD fails" fails render
 kv "$infra" > "$FAKE/infra.json"
+
+kv "$(jq '.SAMPLE_KEY = "line1\nline2"' <<< "$infra")" > "$FAKE/infra.json"
+check "a multi-line infra value fails" fails render
+check "and names the key" grep -q "multi-line value for SAMPLE_KEY" <<< "$(render_err)"
+kv "$infra" > "$FAKE/infra.json"
+kv '{"GREETING": "line1\nline2"}' > "$FAKE/app.json"
+check "a multi-line app value fails" fails render
+check "and names the key" grep -q "multi-line value for GREETING" <<< "$(render_err)"
+kv '{"GREETING": "hello"}' > "$FAKE/app.json"
+
+touch "$FAKE/fail-infra"
+check "a failing read of the infra secret fails" fails render
+check "and says so" grep -q "cannot read the infra secret" <<< "$(render_err)"
+rm "$FAKE/fail-infra"
+touch "$FAKE/fail-app"
+check "a failing read of the app secret fails" fails render
+check "and says so" grep -q "cannot read the app secret" <<< "$(render_err)"
+rm "$FAKE/fail-app"
+check "renders again once the reads work" render
 
 printf 'VAULT_ADDR=http://vault.test\nAFFRAME_VAULT_KV_PREFIX=kv/data/host\n' > "$AFFRAME_HOME/host.conf"
 echo tok-file-456 > "$AFFRAME_HOME/vault-token"

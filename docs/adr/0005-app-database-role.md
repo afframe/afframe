@@ -15,6 +15,8 @@
 - Services and migrations connect as the role `afframe_app`. It has no attribute beyond `LOGIN`.
 - `afframe_app` has `CONNECT`, `TEMP` and `CREATE` on the database, and `USAGE` and `CREATE` on the schema `public`. It owns the schemas and objects that migrations create.
 - The schema `ops` stays with the superuser. `afframe_app` has no grant on it.
+- The role setup creates the schema `ops` and the table `ops.heartbeat` before app code runs, so the superuser owns them.
+- `afframe-backup` does not write the sentinel when another role owns `ops` or `ops.heartbeat`.
 - The password of `afframe_app` has one source: a key in the infra secret in Vault.
 - `deploy/bin/vault-env` derives the connection URL from that password, the Postgres container name and the database name. It renders the URL into the app env.
 - `afframe-deploy` creates the role when it is absent and sets its password on each deploy. It does this before the migrations run.
