@@ -79,6 +79,15 @@ check "a multi-line app value fails" fails render
 check "and names the key" grep -q "multi-line value for GREETING" <<< "$(render_err)"
 kv '{"GREETING": "hello"}' > "$FAKE/app.json"
 
+for key in $'EVIL\nPATH' $'TRAIL\n' lower_key DASH-KEY; do
+  kv "$(jq --arg k "$key" '.[$k] = "x"' <<< '{"GREETING": "hello"}')" > "$FAKE/app.json"
+  check "a bad key fails: ${key//$'\n'/\\n}" fails render
+  check "and names the key" grep -qF "bad key ${key%%$'\n'*}" <<< "$(render_err)"
+done
+kv '{"GREETING": "hello", "lower_PEM": "pem"}' > "$FAKE/app.json"
+check "a PEM key skips the key check" render
+kv '{"GREETING": "hello"}' > "$FAKE/app.json"
+
 touch "$FAKE/fail-infra"
 check "a failing read of the infra secret fails" fails render
 check "and says so" grep -q "cannot read the infra secret" <<< "$(render_err)"

@@ -18,6 +18,8 @@ if [[ "$tool" == Bash ]]; then
   rest="${command#*"${BASH_REMATCH[0]}"}"
   # An unclosed quote before the match means the gh call sits inside a quoted string.
   prefix="${command%%"${BASH_REMATCH[0]}"*}"
+  # An escaped quote is not a delimiter: drop it before the balance check.
+  prefix="${prefix//\\[\"$q]/}"
   closed="^([^\"$q]|\"[^\"]*\"|${q}[^${q}]*${q})*\$"
   [[ "$prefix" =~ $closed ]] || exit 0
   # Keep only this gh call: stop at the first separator outside quotes.

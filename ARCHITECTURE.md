@@ -202,7 +202,7 @@ The restore runs before the first deploy, and the recovery ends before it. The `
 - A change to `deploy/services/<name>.conf` gives that app a new label, so a change to the manifest alone deploys the app.
 - Dependabot base-image updates change the tree, so they deploy. An unpinned upgrade inside a Dockerfile ships only with a source change.
 - `afframe-deploy` refuses a service name that has a file in `deploy/traefik/dynamic/`, because route files share that folder.
-- Host jobs refuse to run as root. `docs/conventions.md` section Configuration names the source of the systemd user.
+- Host jobs and `afframe-deploy` refuse to run as root. `docs/conventions.md` section Configuration names the source of the systemd user.
 - Some values repeat with a pointer comment and a test. Change every copy of the confirm port, the `afframe.tree` label, the root build inputs and the `AFFRAME_HOME` default.
 - `AFFRAME_HOME` holds the releases, `current`, the rendered env, TLS, state and the Traefik config. It also holds the Docker CLI config of the host commands, `deploy.lock` and the Vault files of `docs/conventions.md` section Configuration. Nothing mounts from a release.
 - One `afframe-deploy` runs at a time. It holds an `flock` on `deploy.lock`, and a second run stops.

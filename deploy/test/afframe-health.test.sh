@@ -9,15 +9,28 @@ trap 'rm -rf "$work"' EXIT
 failures=0
 export AFFRAME_HOME="$work/home" FAKE="$work/fake" AFFRAME_ALLOW_ROOT=1 AFFRAME_MAX_DISK_PERCENT=101 \
   AFFRAME_MIN_MEMORY_PERCENT=0 VAULT_ADDR=http://vault.test VAULT_TOKEN=tok-secret-123
-mkdir -p "$FAKE/bin" "$AFFRAME_HOME/env"
+mkdir -p "$FAKE/bin" "$FAKE/state" "$AFFRAME_HOME/env" "$AFFRAME_HOME/state"
 printf 'HEARTBEAT_HEALTH_URL=https://hb.test/ping/hb-key-secret\nALERT_URL=https://alert.test/al-key-secret\n' \
   > "$AFFRAME_HOME/env/infra.env"
 
-# A bare `inspect` fails: the Postgres backup checks do not run.
+# $FAKE/state/<container>: the answer of `inspect -f`, or "fail". Default: running healthy.
+# A bare `inspect` of Postgres fails unless $FAKE/pg exists: then the backup checks run.
+# $FAKE/pgbackrest: the `pgbackrest info` JSON. $FAKE/archiver: the psql answer, or "fail".
 cat > "$FAKE/bin/docker" <<'FAKEDOCKER'
 #!/usr/bin/env bash
-[[ "$1 $2" == "inspect -f" ]] || exit 1
-echo "running healthy"
+case "$*" in
+  "inspect -f"*)
+    state="$FAKE/state/${*: -1}"
+    [[ -f "$state" ]] || { echo "running healthy"; exit 0; }
+    [[ "$(cat "$state")" != fail ]] || exit 1
+    cat "$state" ;;
+  inspect*) [[ -e "$FAKE/pg" ]] ;;
+  *pgbackrest*) cat "$FAKE/pgbackrest" ;;
+  *psql*)
+    [[ "$(cat "$FAKE/archiver")" != fail ]] || exit 1
+    cat "$FAKE/archiver" ;;
+  *) exit 1 ;;
+esac
 FAKEDOCKER
 # $FAKE/vault: the lookup-self response, or "fail".
 cat > "$FAKE/bin/curl" <<'FAKECURL'
@@ -108,6 +121,58 @@ fi
 rm -f "$AFFRAME_HOME/host.conf" "$AFFRAME_HOME/vault-token"
 check "no credential: health fails" fails health -u VAULT_TOKEN
 check "and says so" reported "no Vault credential to check"
+
+vault $((90 * 86400))
+state_of() { echo "$2" > "$FAKE/state/$1"; }
+rm -f "$FAKE/state/"*
+state_of afframe-postgres "exited "
+check "an exited container: health fails" fails health
+check "and names the container and its state" reported "afframe-postgres: exited"
+check "and sends the alert" sent 'url = "https://alert.test/al-key-secret"'
+state_of afframe-postgres "running unhealthy"
+check "an unhealthy container: health fails" fails health
+check "and names the health state" reported "afframe-postgres: running unhealthy"
+state_of afframe-postgres fail
+check "a container that inspect cannot find: health fails" fails health
+check "and reports it as missing" reported "afframe-postgres: missing"
+rm -f "$FAKE/state/"*
+state_of afframe-traefik "running "
+check "a running container without a health check: health ok" health
+printf 'colour=blue\n' > "$AFFRAME_HOME/state/app"
+state_of afframe-app-blue "restarting "
+check "a service colour from the state folder is checked: health fails" fails health
+check "and names the service container" reported "afframe-app-blue: restarting"
+rm -f "$FAKE/state/"* "$AFFRAME_HOME/state/app"
+
+check "disk at the limit: health fails" fails health AFFRAME_MAX_DISK_PERCENT=0
+check "and names the disk" reported "disk / at "
+check "memory under the minimum: health fails" fails health AFFRAME_MIN_MEMORY_PERCENT=101
+check "and names the memory" reported "% memory available"
+
+touch "$FAKE/pg"
+now="$(date +%s)"
+backup_json() { echo "[{\"backup\": [{\"timestamp\": {\"stop\": $1}}]}]" > "$FAKE/pgbackrest"; }
+backup_json $((now - 3600))
+echo f > "$FAKE/archiver"
+check "recent backup and archiving fine: health ok" health
+backup_json $((now - 27 * 3600))
+check "last backup 27 h old: health fails" fails health
+check "and names the age" reported "last backup 27 h ago"
+backup_json $((now - 25 * 3600))
+check "last backup 25 h old: health ok" health
+echo '[]' > "$FAKE/pgbackrest"
+check "no backup at all: health fails" fails health
+check "and reports the epoch age" reported "h ago"
+backup_json $((now - 3600))
+echo t > "$FAKE/archiver"
+check "WAL archiving failing: health fails" fails health
+check "and says so" reported "WAL archiving failing (t)"
+echo fail > "$FAKE/archiver"
+check "archiver query failing: health fails" fails health
+check "and reports it as unknown" reported "WAL archiving failing (unknown)"
+check "the alert carries the problem" on_argv "WAL archiving failing"
+rm -f "$FAKE/pg"
+check "Postgres absent: the backup checks are skipped" health
 
 # shellcheck source=deploy/bin/common.sh
 url_config_of() { (source "$root/deploy/bin/common.sh" && url_config "$1"); }

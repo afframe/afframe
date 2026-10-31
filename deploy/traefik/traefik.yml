@@ -48,7 +48,9 @@ providers:
     directory: /etc/traefik/dynamic
     watch: true
 
-ping: {}
+# Without an entrypoint, ping opens a default :8080 entrypoint on the edge network.
+ping:
+  entryPoint: confirm
 
 log:
   level: INFO

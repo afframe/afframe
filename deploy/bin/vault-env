@@ -17,10 +17,11 @@ read_kv() {
     | jq -e '.data.data'
 }
 
-# write_env <json> <file>: KEY=VALUE lines for every key except *_PEM; refuses multi-line values.
+# write_env <json> <file>: KEY=VALUE lines except *_PEM; refuses bad keys and multi-line values.
 write_env() {
   jq -r 'to_entries[] | select(.key | endswith("_PEM") | not)
-    | if (.value | tostring | contains("\n")) then error("multi-line value for \(.key)")
+    | if (.key | test("\\A[A-Z_][A-Z0-9_]*\\z") | not) then error("bad key \(.key)")
+      elif (.value | tostring | contains("\n")) then error("multi-line value for \(.key)")
       else "\(.key)=\(.value)" end' <<< "$1" > "$2.tmp"
   mv "$2.tmp" "$2"
 }

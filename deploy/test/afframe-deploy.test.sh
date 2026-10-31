@@ -112,8 +112,11 @@ if [[ "$1 $2" == "image inspect" ]]; then
   line="$(awk -v x="${@: -1}" '$1 == x || $2 == x' "$FAKE/local" | tail -n 1)"
   [[ -n "$line" ]] || exit 1
   id="${line#* }"
-  # $FAKE/user: the USER of every image.
-  if [[ "$*" == *'{{.Config.User}}'* ]]; then cat "$FAKE/user"; exit 0; fi
+  # $FAKE/user: the USER of every image but the one ID in $FAKE/root-image, which runs as root.
+  if [[ "$*" == *'{{.Config.User}}'* ]]; then
+    if [[ "$id" == "$(cat "$FAKE/root-image")" ]]; then echo root; else cat "$FAKE/user"; fi
+    exit 0
+  fi
   if [[ "$*" == *'eq $k "afframe.tree"'* ]]; then
     awk -v x="$id" '$1 == x {t = $2} END {print t}' "$FAKE/labels"
     exit 0
@@ -121,7 +124,8 @@ if [[ "$1 $2" == "image inspect" ]]; then
   [[ "$3" != -f ]] || echo "$id"
   exit 0
 fi
-if [[ "$1 $2" == "image ls" ]]; then cat "$FAKE/local"; fi
+# $FAKE/ls=fail: image ls prints the store, then fails.
+if [[ "$1 $2" == "image ls" ]]; then cat "$FAKE/local"; [[ "$(cat "$FAKE/ls")" != fail ]] || exit 1; fi
 if [[ "$1 $2" == "image rm" ]]; then drop "${@: -1}"; fi
 if [[ "$1" == tag ]]; then
   awk -v x="$3" '$1 != x' "$FAKE/local" > "$FAKE/local.tmp"
@@ -150,6 +154,8 @@ echo ok > "$FAKE/compose"
 echo ok > "$FAKE/stanza"
 echo ok > "$FAKE/load"
 echo app > "$FAKE/user"
+echo none > "$FAKE/root-image"
+echo ok > "$FAKE/ls"
 printf 'A=1\nAPP_DB_PASSWORD=pw-secret-789\n' > "$FAKE/infra.env"
 
 n=0 # the workflow run number, one up per deploy
@@ -241,13 +247,17 @@ chmod +x "$FAKE/root/id"
 as_root() {
   : > "$FAKE/calls"
   local output
-  ! output="$(PATH="$FAKE/root:$FAKE/bin:$PATH" "$release/deploy/bin/$1" 2>&1 < /dev/null)" \
+  ! output="$(PATH="$FAKE/root:$FAKE/bin:$PATH" "$release/deploy/bin/$1" "${@:2}" 2>&1 < /dev/null)" \
     && grep -q "refusing to run as root" <<< "$output"
 }
 for job in afframe-backup afframe-health afframe-restore-drill; do
   check "$job refuses to run as root" as_root "$job"
   check "$job ran no docker command as root" test ! -s "$FAKE/calls"
 done
+check "afframe-deploy deploy refuses to run as root" as_root afframe-deploy deploy "$sha" 1 fixture
+check "it ran no docker command as root" test ! -s "$FAKE/calls"
+check "afframe-deploy rollback refuses to run as root" as_root afframe-deploy rollback fixture
+check "it ran no docker command as root" test ! -s "$FAKE/calls"
 
 refused() { ! run "$@" && test ! -s "$FAKE/calls"; }
 check "short sha is refused, nothing ran" refused deploy abc 1 fixture
@@ -422,6 +432,28 @@ for user in "" root 0 0:0 root:root; do
   check "no new container from it" fails called "create --name"
 done
 echo app > "$FAKE/user"
+img fixture 3 > "$FAKE/root-image"
+check "two services, the second runs as root: refused" fails dep migrated=2 fixture=3
+check "the job log names it" printed "fixture: image runs as root; nothing switched"
+check "no migration of any service" fails called "run --rm"
+check "no new container" fails called "create --name"
+echo none > "$FAKE/root-image"
+
+# bad <key> <value>: deploys a service "bad" whose manifest has that value for the key.
+bad() {
+  { printf 'HOST=bad.test\nPORT=3000\nMEMORY=64m\nMIGRATE=migrate up\n' | grep -v "^$1="
+    printf '%s=%s\n' "$1" "$2"; } > "$release/deploy/services/bad.conf"
+  dep bad=1
+}
+# shellcheck disable=SC2016 # a literal backtick: the value closes the Host rule
+for kv in 'HOST=x.test`) || PathPrefix(`/' 'HOST=X.test' 'PORT=80a' 'PORT=' 'MEMORY=64' 'MEMORY=64m;x'; do
+  fails_naming "a manifest with $kv is refused" "bad: invalid ${kv%%=*} in deploy/services/bad.conf" \
+    bad "${kv%%=*}" "${kv#*=}"
+  check "no migration for it" fails called "migrate up"
+  check "no container for it" fails called "create --name"
+  check "no route for it" test ! -e "$AFFRAME_HOME/traefik/dynamic/bad.yml"
+done
+rm "$release/deploy/services/bad.conf"
 
 infra_state="$(cat "$AFFRAME_HOME/state/.infra")"
 echo A=changed > "$FAKE/infra.env"
@@ -475,9 +507,22 @@ echo ok > "$FAKE/switch"
 
 check "previous image kept for rollback" grep -q " $v1$" "$FAKE/local"
 printf '%s\n' "afframe/fixture:old sha256:stale" "afframe-postgres:local sha256:pg" >> "$FAKE/local"
-check "deploy that prunes" dep migrated=4
+echo fail > "$FAKE/ls"
+check "deploy whose image list fails" dep migrated=4
+check "warns that the prune failed" printed "warning: image prune failed"
+check "removes no image after it" fails called "image rm\|image prune"
+check "the stale image still there" grep -q " sha256:stale$" "$FAKE/local"
+check "the current image too" grep -q " $(state migrated current)$" "$FAKE/local"
+check "and the previous image" grep -q " $(state migrated previous)$" "$FAKE/local"
+echo ok > "$FAKE/ls"
+check "deploy that prunes" dep migrated=4b
 check "images that are neither current nor previous are removed" fails grep -q " sha256:stale$" "$FAKE/local"
 check "other images left alone" grep -q "^afframe-postgres:local " "$FAKE/local"
+img fixture 1 > "$FAKE/root-image"
+fails_naming "rollback to an image that runs as root is refused" "image runs as root; nothing switched" \
+  rb rollback fixture
+check "it started no container" fails called "create --name"
+echo none > "$FAKE/root-image"
 check "rollback" run rollback fixture
 check "back on v1" test "$(state fixture current) $(state fixture previous)" == "$v1 $v2"
 check "the image rolled away from is held" test "$(state fixture held)" == "$v2"
@@ -531,6 +576,15 @@ rm "$release/deploy/services/tail.conf" "$AFFRAME_HOME/state/tail"
 check "deploy with a route left that has no state and no manifest" dep
 check "the stale route removed" test ! -e "$AFFRAME_HOME/traefik/dynamic/tail.yml"
 check "its container removed" fails grep -q '^afframe-tail-' "$FAKE/containers"
+echo "http: {}" > "$AFFRAME_HOME/traefik/dynamic/old-static.yml"
+check "deploy with a static Traefik file that the release no longer has" dep
+check "the stale file removed" test ! -e "$AFFRAME_HOME/traefik/dynamic/old-static.yml"
+check "logged as a stale Traefik file" printed "stale Traefik file removed: old-static.yml"
+check "not as a removed service" fails printed "old-static: removed from deploy/services"
+mkdir "$AFFRAME_HOME/traefik/dynamic/old-static.yml"
+check "a stale Traefik file that cannot be removed only warns" dep
+check "the job log names it" printed "warning: cannot remove stale Traefik file old-static.yml"
+rmdir "$AFFRAME_HOME/traefik/dynamic/old-static.yml"
 
 echo A=2 > "$FAKE/infra.env"
 check "deploy after an infra secret change" dep
@@ -639,9 +693,16 @@ check "two services waited for in parallel" dep fixture=11 migrated=11
 echo none > "$FAKE/barrier"
 
 p_new="afframe-fixture-$(other "$(state fixture colour)")"
+m_new="afframe-migrated-$(other "$(state migrated colour)")"
+mkdir "$AFFRAME_HOME/traefik/dynamic/fixture.yml.tmp" # the first route write fails
+check "a failure before the first route write fails the deploy" fails dep fixture=12 migrated=12
+check "the first new colour removed" fails exists "$p_new"
+check "the second new colour removed" fails exists "$m_new"
+rmdir "$AFFRAME_HOME/traefik/dynamic/fixture.yml.tmp"
 mkdir "$AFFRAME_HOME/traefik/dynamic/migrated.yml.tmp" # the second route write fails
 check "a failure after the first switch fails the deploy" fails dep fixture=12 migrated=12
 check "the switched service keeps its new colour" exists "$p_new"
+check "the unswitched service's new colour removed" fails exists "$m_new"
 check "and its route" grep -q "$p_new:8080" <<< "$(route fixture)"
 check "the job log names the route file" printed "traefik/dynamic/migrated.yml"
 check "and never the absolute host path" fails printed "$AFFRAME_HOME"
