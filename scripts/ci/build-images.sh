@@ -11,12 +11,15 @@ cd "$(git rev-parse --show-toplevel)"
 project="$(sed -n 's/^name: *//p' deploy/compose.prod.yml 2> /dev/null || true)"
 [[ -n "$project" ]] || { echo "build-images.sh: no project name in deploy/compose.prod.yml" >&2; exit 2; }
 
-# label_of <service>: a hash of the git trees an image of <service> builds from.
+# label_of <service>: a hash of the git trees an image of <service> builds from, and its manifest.
 label_of() {
   # The root inputs repeat in the shared pattern of scripts/ci/ci-changes.sh and in .dockerignore.
+  # afframe-deploy skips a service with the same label, so a manifest change needs a new one.
   local path id
   git rev-parse --verify -q "HEAD:apps/$1" > /dev/null || { echo "build-images.sh: no apps/$1 in HEAD" >&2; return 1; }
-  for path in "apps/$1" packages package.json pnpm-lock.yaml pnpm-workspace.yaml .dockerignore; do
+  local inputs=("apps/$1" "deploy/services/$1.conf" packages package.json pnpm-lock.yaml pnpm-workspace.yaml)
+  inputs+=(.dockerignore)
+  for path in "${inputs[@]}"; do
     id="$(git rev-parse --verify -q "HEAD:$path")" || continue
     printf '%s %s\n' "$path" "$id"
   done | git hash-object --stdin

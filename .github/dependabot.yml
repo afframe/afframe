@@ -1,6 +1,5 @@
 # Titles like `chore(deps): bump ...`: the PR title check requires Conventional Commits.
 # dependabot-auto-merge.yml merges only the toolbox and the test images except the runner.
-# Keep deployed images apart.
 version: 2
 updates:
   - package-ecosystem: github-actions

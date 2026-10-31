@@ -17,4 +17,4 @@
 ## Consequences
 
 - Type checks and lint use one TypeScript version.
-- A TypeScript update past 6.0 waits until the typescript-eslint peer range accepts it. That change also updates the Dependabot ignore.
+- The typescript-eslint peer range limits TypeScript to 6.0. A change of the pin also changes the Dependabot ignore.

@@ -38,6 +38,9 @@ if [[ "$1" == exec && "$*" == *" pg_isready"* ]]; then [[ "$(cat "$FAKE/ready")"
 [[ "$1" != compose ]] || echo "traefik-hash ${AFFRAME_TRAEFIK_HASH:-}" >> "$FAKE/calls"
 # Output that must stay on the host: <kind>-secret.
 [[ "$1" != compose ]] || echo "compose-secret"
+# $FAKE/compose, $FAKE/stanza, $FAKE/load = fail: compose, stanza-create or load fails.
+[[ "$1" != compose || "$(cat "$FAKE/compose")" != fail ]] || exit 1
+if [[ "$1" == exec && "$*" == *" stanza-create"* ]]; then [[ "$(cat "$FAKE/stanza")" != fail ]]; exit; fi
 if [[ "$1" == logs ]]; then echo "app-log-secret"; exit 0; fi
 # barrier <kind>: when $FAKE/barrier names <kind>, fails unless two such calls overlap in 3 s.
 barrier() {
@@ -97,6 +100,7 @@ if [[ "$1" == run && "$*" == *" --rm "* && "$*" == *" --name "* ]]; then forget 
 # Image store: "<ref> <ID>" in local, "<ID> <tree>" in labels; load reads "<ref> <ID> [<tree>]".
 drop() { awk -v x="$1" '$1 != x && $2 != x' "$FAKE/local" > "$FAKE/local.tmp"; mv "$FAKE/local.tmp" "$FAKE/local"; }
 if [[ "$1" == load ]]; then
+  [[ "$(cat "$FAKE/load")" != fail ]] || exit 1
   while read -r ref id tree; do
     drop "$ref"
     echo "$ref $id" >> "$FAKE/local"
@@ -108,7 +112,12 @@ if [[ "$1 $2" == "image inspect" ]]; then
   line="$(awk -v x="${@: -1}" '$1 == x || $2 == x' "$FAKE/local" | tail -n 1)"
   [[ -n "$line" ]] || exit 1
   id="${line#* }"
-  if [[ "$*" == *afframe.tree* ]]; then awk -v x="$id" '$1 == x {t = $2} END {print t}' "$FAKE/labels"; exit 0; fi
+  # $FAKE/user: the USER of every image.
+  if [[ "$*" == *'{{.Config.User}}'* ]]; then cat "$FAKE/user"; exit 0; fi
+  if [[ "$*" == *'eq $k "afframe.tree"'* ]]; then
+    awk -v x="$id" '$1 == x {t = $2} END {print t}' "$FAKE/labels"
+    exit 0
+  fi
   [[ "$3" != -f ]] || echo "$id"
   exit 0
 fi
@@ -137,6 +146,10 @@ echo none > "$FAKE/barrier"
 echo true > "$FAKE/infra"
 echo ok > "$FAKE/role"
 echo ok > "$FAKE/ready"
+echo ok > "$FAKE/compose"
+echo ok > "$FAKE/stanza"
+echo ok > "$FAKE/load"
+echo app > "$FAKE/user"
 printf 'A=1\nAPP_DB_PASSWORD=pw-secret-789\n' > "$FAKE/infra.env"
 
 n=0 # the workflow run number, one up per deploy
@@ -156,6 +169,8 @@ dep_env() {
   stream "$@" | env ${envs[@]+"${envs[@]}"} PATH="$FAKE/bin:$PATH" "$deploy" deploy "$sha" "$n" "${@%%=*}" \
     > "$FAKE/out" 2>&1
 }
+# rb <argument>...: runs afframe-deploy with those arguments, output in $FAKE/out.
+rb() { : > "$FAKE/calls"; PATH="$FAKE/bin:$PATH" "$deploy" "$@" < /dev/null > "$FAKE/out" 2>&1; }
 run() { : > "$FAKE/calls"; PATH="$FAKE/bin:$PATH" "$deploy" "$@" < /dev/null > /dev/null 2>&1; }
 host_job() { PATH="$FAKE/bin:$PATH" "$release/deploy/bin/$1" "${@:2}" < /dev/null > /dev/null 2>&1; }
 state() { sed -n "s/^$2=//p" "$AFFRAME_HOME/state/$1" 2> /dev/null; }
@@ -262,6 +277,10 @@ check "Postgres readiness checked before the role setup" \
 sql_line() { grep -n -- "$1" "$FAKE/sql" | head -n 1 | cut -d: -f1; }
 check "server error log off before the password statement" \
   test "$(sql_line "SET log_min_error_statement")" -lt "$(sql_line "ALTER ROLE")"
+check "role setup creates the ops schema" grep -qxF "CREATE SCHEMA IF NOT EXISTS ops;" "$FAKE/sql"
+check "and the ops.heartbeat table" grep -q "^CREATE TABLE IF NOT EXISTS ops.heartbeat " "$FAKE/sql"
+check "as the superuser, before any grant to the app role" \
+  test "$(sql_line "CREATE TABLE IF NOT EXISTS ops.heartbeat")" -lt "$(sql_line "GRANT")"
 check "app password not in a docker call" fails called pw-secret-789
 check "nor in the SQL" fails grep -q pw-secret-789 "$FAKE/sql"
 check "nor in the job log" fails printed pw-secret-789
@@ -306,6 +325,13 @@ rm "$AFFRAME_HOME/deploy.lock"
 mkdir "$AFFRAME_HOME/deploy.lock"
 fails_naming "a lock that cannot be opened fails the deploy" "deploy.lock" dep
 rmdir "$AFFRAME_HOME/deploy.lock"
+exec 8> "$AFFRAME_HOME/deploy.lock"
+flock -n 8
+fails_naming "a deploy while another deploy holds the lock fails" "another deploy is running" dep
+check "and ran no docker command" test ! -s "$FAKE/calls"
+fails_naming "a rollback while another deploy holds the lock fails" "another deploy is running" rb rollback fixture
+check "and ran no docker command" test ! -s "$FAKE/calls"
+exec 8>&-
 mv "$AFFRAME_HOME/tls" "$work/tls"
 touch "$AFFRAME_HOME/tls"
 fails_naming "a host folder that cannot be created fails the deploy" "cannot create" dep
@@ -350,7 +376,7 @@ check "the same run again deploys (re-run)" run deploy "$sha" "$n"
 check "deploy with migration" dep migrated=1
 check "migration ran in the new image" \
   called "run --rm --name afframe-migrated-migrate --network afframe-db --env-file $AFFRAME_HOME/env/app.env \
---cap-drop ALL --security-opt no-new-privileges --pids-limit 512 $(img migrated 1) migrate up"
+--memory 64m --cap-drop ALL --security-opt no-new-privileges --pids-limit 512 $(img migrated 1) migrate up"
 check "migration before the new container" before "migrate up" "create --name afframe-migrated-blue"
 check "role setup before the migration" before "exec -i afframe-postgres" "migrate up"
 check "migration container gone" fails exists afframe-migrated-migrate
@@ -388,6 +414,34 @@ echo fail > "$FAKE/ready"
 fails_naming "Postgres that never gets ready fails the deploy" "Postgres not ready" dep migrated=2
 check "no role setup when Postgres is not ready" fails called "exec -i afframe-postgres"
 echo ok > "$FAKE/ready"
+for user in "" root 0 0:0 root:root; do
+  echo "$user" > "$FAKE/user"
+  fails_naming "an image that runs as root is refused (USER '$user')" "image runs as root; nothing switched" \
+    dep migrated=2
+  check "no migration from it" fails called "migrate up"
+  check "no new container from it" fails called "create --name"
+done
+echo app > "$FAKE/user"
+
+infra_state="$(cat "$AFFRAME_HOME/state/.infra")"
+echo A=changed > "$FAKE/infra.env"
+echo fail > "$FAKE/compose"
+fails_naming "a failed compose up fails the deploy" "log/compose-up.log" dep migrated=2
+check "no backup stanza created after it" fails called "stanza-create"
+check "infrastructure state unchanged" test "$(cat "$AFFRAME_HOME/state/.infra")" == "$infra_state"
+check "no new container after it" fails called "create --name"
+echo ok > "$FAKE/compose"
+echo fail > "$FAKE/stanza"
+fails_naming "a failed stanza-create fails the deploy" "log/stanza-create.log" dep migrated=2
+check "infrastructure state unchanged by it" test "$(cat "$AFFRAME_HOME/state/.infra")" == "$infra_state"
+check "no new container after it" fails called "create --name"
+echo ok > "$FAKE/stanza"
+echo A=1 > "$FAKE/infra.env"
+echo fail > "$FAKE/load"
+fails_naming "a failed docker load fails the deploy" "docker load failed; nothing switched" dep migrated=2
+check "infrastructure not touched after it" fails called "compose -p afframe"
+check "no new container after it" fails called "create --name"
+echo ok > "$FAKE/load"
 
 echo fail > "$FAKE/remove"
 check "deploy succeeds when the old colour cannot be removed" dep migrated=3
@@ -446,6 +500,23 @@ check "on the new image, hold cleared" \
 printf 'current=a\ncolour=blue\nprevious=sha256:gone\n' > "$AFFRAME_HOME/state/ghost"
 check "rollback with its previous image gone fails" fails run rollback ghost
 rm -f "$AFFRAME_HOME/state/ghost"
+usage_rollback="usage: rollback <service>"
+fails_naming "rollback of a name with a shell character is refused" "$usage_rollback" rb rollback "x;y"
+fails_naming "rollback of a reserved name is refused" "$usage_rollback" rb rollback tls
+fails_naming "rollback without a service is refused" "$usage_rollback" rb rollback
+check "none of them ran a docker command" test ! -s "$FAKE/calls"
+fails_naming "an unknown subcommand is refused" "usage: afframe-deploy deploy" rb restart fixture
+check "it ran no docker command" test ! -s "$FAKE/calls"
+cp "$AFFRAME_HOME/state/fixture" "$work/fixture.state"
+cp "$AFFRAME_HOME/traefik/dynamic/fixture.yml" "$work/fixture.route"
+echo "afframe-fixture-$(other "$(state fixture colour)")" > "$FAKE/health"
+check "rollback to an unhealthy previous colour fails" fails rb rollback fixture
+check "the job log names the failed health check" printed "health check failed"
+check "state unchanged, nothing held" cmp -s "$AFFRAME_HOME/state/fixture" "$work/fixture.state"
+check "route unchanged" cmp -s "$AFFRAME_HOME/traefik/dynamic/fixture.yml" "$work/fixture.route"
+check "no held image recorded" test -z "$(state fixture held)"
+check "the live colour not stopped" fails called "stop -t 30"
+echo ok > "$FAKE/health"
 printf 'HOST=held.test\nPORT=8080\nMEMORY=64m\nMIGRATE=\n' > "$release/deploy/services/held.conf"
 check "deploy of a service named held" dep held=1
 check "it switches" test "$(state held current)" == "$(img held 1)"

@@ -11,6 +11,8 @@ pgbackrest_env=(
   -v "$PGBACKREST_VOLUME:/var/lib/pgbackrest:ro"
   -v "$name:/var/lib/postgresql"
 )
+# No --network none: the restore reads a remote backup repository.
+hardening=(--cap-drop ALL --security-opt no-new-privileges --pids-limit "$PIDS_LIMIT")
 
 cleanup() {
   docker rm -f -v "$name" > /dev/null 2>&1 || true
@@ -37,10 +39,10 @@ drill() {
   cleanup
   log "restore into $name"
   # Called with `|| code=$?`, so errexit is off in here: every step returns on failure itself.
-  docker run --rm "${pgbackrest_env[@]}" -u postgres "$image" \
+  docker run --rm "${pgbackrest_env[@]}" "${hardening[@]}" -u postgres "$image" \
     sh -c 'mkdir -m 700 -p "$PGBACKREST_PG1_PATH" && pgbackrest restore' || return 1
   # archive_mode off: the drill must never push WAL into the backup repository of the deploy host.
-  docker run -d --name "$name" "${pgbackrest_env[@]}" "$image" \
+  docker run -d --name "$name" "${pgbackrest_env[@]}" "${hardening[@]}" "$image" \
     postgres -c archive_mode=off > /dev/null || return 1
 
   log "wait for recovery to finish"

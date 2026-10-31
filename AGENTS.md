@@ -19,6 +19,7 @@ The sections from "All files" to "YAML and workflows" are the writing rules. The
 | `compose.dev.yml`, `scripts/dev/` | The dev Postgres of a local Conductor workspace |
 | `docs/templates/app/` | Starter files for a new app. `docs/templates/app/README.md` gives the steps. |
 | `.mcp.json`, `.claude/`, `.conductor/`, `scripts/setup.sh`, `scripts/conductor/`, `favicon.svg` | Agent tooling, with the CodeGraph dependency in the root `package.json`. `favicon.svg` is the Conductor repository icon. |
+| `.github/rulesets/`, `.github/dependabot.yml`, `.github/CODEOWNERS`, `.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md`, `.coderabbit.yaml`, `.gitleaks.toml`, `.editorconfig`, `.gitattributes`, `.gitignore`, `LICENSE` | Repository settings, templates, review and scan tool config, editor and git attributes, and the license |
 | `$INTERNAL` | The private documentation repository. It holds the deploy host facts. |
 
 ## Commands
@@ -144,12 +145,12 @@ Personal agent configuration comes from the setup of each runner environment, no
 - The build context of an app image is the repository root, so `COPY` paths start at the root.
 - `GET /health` returns 2xx.
 - The container gets `DATABASE_URL` for the app role. The app role (`APP_ROLE` in `deploy/bin/common.sh`) is not a superuser.
-- The container runs with no Linux capabilities, no-new-privileges and the process limit of `deploy/bin/afframe-deploy`. Run as a non-root user and listen on a port above 1023.
+- The container runs with no Linux capabilities, no-new-privileges and the process limit `PIDS_LIMIT` of `deploy/bin/common.sh`. Run as a non-root user and listen on a port above 1023. The deploy refuses an image whose user is empty, `root` or `0`.
 - `compose.ci.yml` defines the services `test` and an optional `migrate`. For a real app, each one depends on the per-app services in `docs/templates/app/compose.ci.yml.example`. The exit code of `test` is the result. Start from `docs/templates/app/`.
 - CI and the deploy test the image that they ship. The header of `scripts/ci/service-tests.sh` tells how.
 - `deploy/services/<name>.conf` makes a service deployable. Its keys are `HOST`, `PORT`, `MEMORY` and `MIGRATE`.
-- `HOST` is the public host name. The container gets `PORT` as `$PORT`. `MIGRATE` is the migration command, or empty.
-- `scripts/ci/ci-changes.sh` fails when a deployable service exists and `compose.ci.yml` is missing.
+- `HOST` is the public host name. The container gets `PORT` as `$PORT`. `MEMORY` limits the service and its migration. `MIGRATE` is the migration command, or empty.
+- `scripts/ci/ci-changes.sh` fails when a deployable service exists and `compose.ci.yml` or its `apps/<name>/Dockerfile` is missing.
 - To remove a service, delete its `.conf` file. The next deploy removes its route, containers and deployment metadata. The shared database volumes remain.
 
 ## Database changes
