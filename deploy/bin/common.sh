@@ -37,14 +37,15 @@ env_value() {
 
 # read_vars <file> <NAME>...: sets each NAME from NAME=value lines, literally, never evaluated.
 read_vars() {
-  local file="$1" key value name
+  local file="$1" line name
   shift
   [[ -f "$file" ]] || return 0
   # A relative name: Actions logs are public.
   [[ -r "$file" ]] || { file="${file#"$REPO/"}"; die "cannot read ${file#"$AFFRAME_HOME/"}"; }
-  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == *=* ]] || continue
     for name in "$@"; do
-      [[ "$key" == "$name" ]] && printf -v "$name" '%s' "$value"
+      [[ "${line%%=*}" == "$name" ]] && printf -v "$name" '%s' "${line#*=}"
     done
   done < "$file"
   return 0

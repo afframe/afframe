@@ -9,7 +9,12 @@ failures=0
 
 mkdir -p "$tmp/bin" "$tmp/repo/apps/a" "$tmp/repo/apps/b" "$tmp/repo/deploy"
 printf 'name: proj\n' > "$tmp/repo/deploy/compose.prod.yml"
-printf '#!/usr/bin/env bash\necho "docker $*" | tee -a "%s/calls"\n' "$tmp" > "$tmp/bin/docker"
+cat > "$tmp/bin/docker" << EOF
+#!/usr/bin/env bash
+echo "docker \$*" >> "$tmp/calls"
+if [[ "\$1 \$2" == "image inspect" ]]; then cat "$tmp/user"; else echo "docker \$*"; fi
+EOF
+echo node > "$tmp/user"
 chmod +x "$tmp/bin/docker"
 git -C "$tmp/repo" init -q
 touch "$tmp/repo/apps/a/Dockerfile" "$tmp/repo/apps/b/Dockerfile"
@@ -72,6 +77,15 @@ expect "no service is a usage error" 2 "$?"
 : > "$tmp/repo/deploy/compose.prod.yml"
 (cd "$tmp/repo" && PATH="$tmp/bin:$PATH" bash "$script" t1 a > /dev/null 2>&1)
 expect "no compose project name fails" 2 "$?"
+printf 'name: proj\n' > "$tmp/repo/deploy/compose.prod.yml"
+for user in "" root 0 0:0; do
+  echo "$user" > "$tmp/user"
+  : > "$tmp/calls"
+  err="$(cd "$tmp/repo" && PATH="$tmp/bin:$PATH" bash "$script" t1 a b 2>&1 > /dev/null)"
+  expect "USER '$user' fails and names the service" "1 yes" \
+    "$? $([[ "$err" == *"build-images.sh: a: image runs as root (USER $user)"* ]] && echo yes)"
+  expect "USER '$user' builds no later service" no "$(grep -q 'proj/b' "$tmp/calls" && echo yes || echo no)"
+done
 
 if [[ "$failures" -gt 0 ]]; then
   echo "${failures} test(s) failed"

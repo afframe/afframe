@@ -145,11 +145,12 @@ Personal agent configuration comes from the setup of each runner environment, no
 - The build context of an app image is the repository root, so `COPY` paths start at the root.
 - `GET /health` returns 2xx.
 - The container gets `DATABASE_URL` for the app role. The app role (`APP_ROLE` in `deploy/bin/common.sh`) is not a superuser.
-- The container runs with no Linux capabilities, no-new-privileges and the process limit `PIDS_LIMIT` of `deploy/bin/common.sh`. Run as a non-root user and listen on a port above 1023. The deploy refuses an image whose user is empty, `root` or `0`.
+- The container runs with no Linux capabilities, no-new-privileges and the process limit `PIDS_LIMIT` of `deploy/bin/common.sh`. Run as a non-root user and listen on a port above 1023. The deploy refuses an image whose user is empty, `root` or `0`, before any migration runs.
 - `compose.ci.yml` defines the services `test` and an optional `migrate`. For a real app, each one depends on the per-app services in `docs/templates/app/compose.ci.yml.example`. The exit code of `test` is the result. Start from `docs/templates/app/`.
 - CI and the deploy test the image that they ship. The header of `scripts/ci/service-tests.sh` tells how.
 - `deploy/services/<name>.conf` makes a service deployable. Its keys are `HOST`, `PORT`, `MEMORY` and `MIGRATE`.
-- `HOST` is the public host name. The container gets `PORT` as `$PORT`. `MEMORY` limits the service and its migration. `MIGRATE` is the migration command, or empty.
+- `HOST` is the public host name. The container gets `PORT` as `$PORT`. `MEMORY` limits the service and its migration. `MIGRATE` is the migration command, or empty. The deploy splits it at spaces, with no shell quoting or globs.
+- `HOST` holds only `a-z`, `0-9`, `.` and `-`. `PORT` is a number. `MEMORY` is a number with `k`, `m` or `g`. The deploy refuses other values.
 - `scripts/ci/ci-changes.sh` fails when a deployable service exists and `compose.ci.yml` or its `apps/<name>/Dockerfile` is missing.
 - To remove a service, delete its `.conf` file. The next deploy removes its route, containers and deployment metadata. The shared database volumes remain.
 

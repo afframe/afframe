@@ -56,7 +56,7 @@ quiet() {
 
 # prune_images: removes $PROJECT/* references to images that are no service's current or previous.
 prune_images() {
-  local keep="" ref id states state kind current previous
+  local keep="" refs ref id states state kind current previous
   # No service state yet (infrastructure-only first deploy): nothing to keep.
   shopt -s nullglob
   states=("$AFFRAME_HOME"/state/*)
@@ -73,13 +73,16 @@ prune_images() {
   # Never || true: an empty keep would prune the current images.
   ((${#states[@]} == 0)) || keep="$(sed -n 's/^\(current\|previous\)=//p' "${states[@]}" 2> /dev/null)" \
     || die "cannot read state/"
-  docker image ls --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}' \
-    | while read -r ref id; do
-      [[ "$ref" == "$PROJECT"/* ]] || continue
-      grep -qxF "$id" <<< "$keep" || docker image rm "$ref" > /dev/null 2>&1 || true
-    done
-  docker image prune -f > /dev/null 2>&1 || true
-  docker builder prune -f --filter until=168h > /dev/null 2>&1 || true
+  # The caller runs this left of ||, where set -e is off: each docker call returns on failure.
+  refs="$(docker image ls --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}')" || return 1
+  while read -r ref id; do
+    [[ "$ref" == "$PROJECT"/* ]] || continue
+    # A leftover container that uses the image blocks only that removal, not the prune.
+    grep -qxF "$id" <<< "$keep" || docker image rm "$ref" > /dev/null 2>&1 \
+      || echo "warning: could not remove image $ref" >&2
+  done <<< "$refs"
+  docker image prune -f > /dev/null 2>&1 || return 1
+  docker builder prune -f --filter until=168h > /dev/null 2>&1 || return 1
 }
 
 # Physical paths, like REPO, so a symlink in AFFRAME_HOME never makes this release look old.
@@ -209,6 +212,10 @@ load_service() {
   local manifest="$REPO/deploy/services/$1.conf"
   [[ -f "$manifest" ]] || die "no manifest deploy/services/$1.conf"
   read_vars "$manifest" HOST PORT MEMORY MIGRATE
+  # HOST goes into a Traefik rule: a backtick in it would add a matcher to the route.
+  [[ "$HOST" =~ ^[a-z0-9.-]+$ ]] || die "$1: invalid HOST in deploy/services/$1.conf"
+  [[ "$PORT" =~ ^[0-9]+$ ]] || die "$1: invalid PORT in deploy/services/$1.conf"
+  [[ "$MEMORY" =~ ^[0-9]+[kmg]$ ]] || die "$1: invalid MEMORY in deploy/services/$1.conf"
   read_vars "$AFFRAME_HOME/state/$1" current previous
   # Later phases pass the resolved colour: live_colour would take the new one for live.
   if (($# > 1)); then
@@ -235,6 +242,14 @@ same_image() {
   [[ -n "$tree" && "$tree" == "$(tree_of "$2")" ]]
 }
 
+# refuse_root_image <service> <image>: runs before any migration, so a refusal changes nothing.
+refuse_root_image() {
+  local user
+  user="$(docker image inspect -f '{{.Config.User}}' "$2" 2> /dev/null)" \
+    || die "$1: cannot inspect image $2; nothing switched"
+  case "${user%%:*}" in "" | root | 0) die "$1: image runs as root; nothing switched" ;; esac
+}
+
 # load_images <git-sha> <service>...: loads stdin, prints "<service>=<image ID>" per changed one.
 load_images() {
   local sha="$1" service id current held
@@ -247,6 +262,7 @@ load_images() {
     # scripts/ci/build-images.sh tags the images in the same Compose project namespace.
     id="$(docker image inspect -f '{{.Id}}' "$PROJECT/$service:$sha" 2> /dev/null)" \
       || die "$service: $PROJECT/$service:$sha not in the image stream; nothing switched"
+    refuse_root_image "$service" "$id"
     current="" held=""
     read_vars "$AFFRAME_HOME/state/$service" current held
     if same_image "$id" "$held"; then
@@ -265,23 +281,19 @@ start_service() {
   local HOST="" PORT="" MEMORY="" MIGRATE="" current="" colour="" previous="" new="" name="" old=""
   load_service "$service"
   live+=("${colour:--}")
-  local user
-  user="$(docker image inspect -f '{{.Config.User}}' "$image" 2> /dev/null)" \
-    || die "$service: cannot inspect image $image; nothing switched"
-  case "${user%%:*}" in "" | root | 0) die "$service: image runs as root; nothing switched" ;; esac
 
   if [[ "$migrate" == yes && -n "$MIGRATE" ]]; then
     log "$service: migrate"
     # A fixed name, so a migration left behind by a killed deploy is removed before the next one.
-    local migration="$PROJECT-$service-migrate"
+    local migration="$PROJECT-$service-migrate" args
     docker rm -f "$migration" > /dev/null 2>&1 || true
+    read -ra args <<< "$MIGRATE"
     # TERM after the timeout, KILL a grace period later (a migration ignoring TERM would keep the
     # client waiting). Then the named container goes too, as killing the client does not stop it.
-    # shellcheck disable=SC2086 # MIGRATE is a command line from the manifest
     if ! quiet "$migration.log" timeout -k "$MIGRATE_KILL_AFTER" "$MIGRATE_TIMEOUT" \
       docker run --rm --name "$migration" --network "$DB_NETWORK" --env-file "$AFFRAME_HOME/env/app.env" \
       --memory "$MEMORY" --cap-drop ALL --security-opt no-new-privileges --pids-limit "$PIDS_LIMIT" \
-      "$image" $MIGRATE; then
+      "$image" "${args[@]}"; then
       docker rm -f "$migration" > /dev/null 2>&1 || true
       die "$service: migration not run, failed or timed out; nothing switched"
     fi
@@ -368,6 +380,13 @@ http:
         servers:
           - url: http://$name:$PORT
 YAML
+  # Routed: a later failure must not remove it, or a failure between two route writes would take
+  # down a service already switched.
+  local entry routed=()
+  for entry in "${pending[@]}"; do
+    [[ "$entry" == "$name" ]] || routed+=("$entry")
+  done
+  pending=("${routed[@]}")
   printf 'current=%s\ncolour=%s\nprevious=%s\nheld=%s\n' "$image" "$new" "$current" "$held" \
     | write_file "$state"
   switched+=("$service $HOST $name")
@@ -423,9 +442,6 @@ switch_all() {
   local held="$1" spec i=0
   shift
   undo_dir="$(mktemp -d)"
-  # Every new colour is healthy and about to take traffic: none is removed on exit any more, or a
-  # failure between two route writes would take down a service already switched.
-  pending=()
   for spec in "$@"; do
     switch_service "${spec%%=*}" "${spec#*=}" "${live[i++]}" "$held"
   done
@@ -456,6 +472,15 @@ retire_removed() {
     [[ ! -f "$REPO/deploy/services/$service.conf" && ! -e "$REPO/deploy/traefik/dynamic/$service.yml" ]] || continue
     # A service with both a state and a route comes up twice.
     [[ -e "$state" || -e "$AFFRAME_HOME/traefik/dynamic/$service.yml" ]] || continue
+    # A static file of an older release: no state, and no colour in it.
+    if [[ ! -e "$state" ]] && ! grep -q "url: http://$PROJECT-$service-\(blue\|green\):" "$file" 2> /dev/null; then
+      if rm -f "$file" 2> /dev/null; then
+        log "stale Traefik file removed: $service.yml"
+      else
+        echo "warning: cannot remove stale Traefik file $service.yml" >&2
+      fi
+      continue
+    fi
     log "$service: removed from deploy/services; retiring its route, containers and state"
     names="$(docker ps -a --format '{{.Names}}')"
     for colour in blue green; do
@@ -489,6 +514,7 @@ main() {
         || die "usage: deploy <git-sha> <run-number> [<service> ...]"
       local services=("${@:4}")
       validate_services "${services[@]}"
+      refuse_root
       lock
       docker_config
       # A re-run of an older run never replaces a newer deploy. The same run again may.
@@ -519,6 +545,7 @@ main() {
     rollback)
       local service="${2:-}" current="" previous="" held=""
       valid_service "$service" || die "usage: rollback <service>"
+      refuse_root
       lock
       docker_config
       trap cleanup EXIT
@@ -526,6 +553,7 @@ main() {
       [[ -z "$held" ]] || die "$service: already rolled back; deploy a different image"
       [[ -n "$previous" ]] || die "$service: no previous image to roll back to"
       docker image inspect "$previous" > /dev/null 2>&1 || die "$service: previous image $previous is gone"
+      refuse_root_image "$service" "$previous"
       start_all no "$service=$previous"
       switch_all "$current" "$service=$previous"
       log "$service: rolled back; $current is held until a different image is deployed"

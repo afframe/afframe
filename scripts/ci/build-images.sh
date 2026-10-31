@@ -36,5 +36,10 @@ for service in "$@"; do
   # afframe-deploy compares the afframe.tree label to skip a deploy of the same tree.
   docker buildx build --load --platform linux/amd64 --provenance=false ${cache[@]+"${cache[@]}"} \
     --label "afframe.tree=$tree" -t "$project/$service:$tag" -f "apps/$service/Dockerfile" . >&2
+  # The user rule matches refuse_root_image in deploy/bin/afframe-deploy.
+  user="$(docker image inspect -f '{{.Config.User}}' "$project/$service:$tag")"
+  case "${user%%:*}" in
+    "" | root | 0) echo "build-images.sh: $service: image runs as root (USER $user)" >&2; exit 1 ;;
+  esac
   echo "apps/$service=$project/$service:$tag"
 done
