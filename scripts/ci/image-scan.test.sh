@@ -15,7 +15,7 @@ git -C "$repo" init -q
 printf '# comment\nFROM aquasec/trivy:test@sha256:abc\n' > "$repo/scripts/ci/trivy/Dockerfile"
 
 # The fake docker logs every call. $FAKE/local lists the images that exist, $FAKE/pull-fail the
-# images that cannot be pulled. `save` writes the image name, and `run` fails for a stream with "bad".
+# images that cannot be pulled. `save` writes the image name. `run` fails for a stream with "bad".
 cat > "$FAKE/bin/docker" <<'FAKEDOCKER'
 #!/usr/bin/env bash
 echo "docker $*" >> "$FAKE/calls"
