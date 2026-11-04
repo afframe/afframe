@@ -205,6 +205,8 @@ printf '%s\n' "$infra" > "$AFFRAME_HOME/env/infra.env"
 
 rm -f "$FAKE/pg"
 check "Postgres absent: the backup checks are skipped" health
+check "the timer runs at 00, 06, 12 and 18 UTC" \
+  grep -qxF 'OnCalendar=*-*-* 00,06,12,18:00:00 UTC' "$root/deploy/host/systemd/afframe-health.timer"
 
 # shellcheck source=deploy/bin/common.sh
 url_config_of() { (source "$root/deploy/bin/common.sh" && url_config "$1"); }
