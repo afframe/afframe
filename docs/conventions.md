@@ -19,6 +19,7 @@
 | Service host name, port, memory, migration | `deploy/services/<name>.conf` | `read_vars` |
 | Deploy target (user and host) | one repository secret | `.github/workflows/deploy.yml`, through the secret context |
 | Switches and settings such as `DEPLOY_ENABLED` and `CLAUDE_REVIEW_OWNER` | repository variable | the `vars` context |
+| Backup switch `AFFRAME_BACKUPS` | the infra secret in Vault, rendered to `infra.env` | `backups_off` in `deploy/bin/common.sh` |
 | `AFFRAME_HOME` | default in `deploy/bin/common.sh`, or the environment | the host commands |
 | Vault address and Vault path | `$AFFRAME_HOME/host.conf`, which overrides the environment | `vault_credential` in `deploy/bin/common.sh` |
 | Vault credential of the host | the environment, or else `$AFFRAME_HOME/vault-token` | `vault_credential` in `deploy/bin/common.sh` |

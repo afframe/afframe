@@ -35,6 +35,9 @@ env_value() {
   sed -n "s/^$1=//p" "$file" | head -n 1
 }
 
+# backups_off: only the exact value off turns them off. Unset or any other value keeps them on.
+backups_off() { [[ "$(env_value AFFRAME_BACKUPS)" == off ]]; }
+
 # read_vars <file> <NAME>...: sets each NAME from NAME=value lines, literally, never evaluated.
 read_vars() {
   local file="$1" line name

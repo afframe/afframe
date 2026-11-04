@@ -146,7 +146,9 @@ prepare() {
   fi
   log "infrastructure"
   AFFRAME_TRAEFIK_HASH="$(traefik_hash)"
-  export AFFRAME_TRAEFIK_HASH
+  AFFRAME_ARCHIVE_MODE=on
+  ! backups_off || AFFRAME_ARCHIVE_MODE=off
+  export AFFRAME_TRAEFIK_HASH AFFRAME_ARCHIVE_MODE
   quiet compose-up.log compose up -d --build --wait --quiet-pull
   quiet stanza-create.log docker exec -u postgres "$POSTGRES" pgbackrest stanza-create
   printf 'hash=%s\n' "$now" | write_file "$AFFRAME_HOME/state/.infra"
