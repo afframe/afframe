@@ -90,6 +90,10 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 - Run the other host commands on the deploy host as the user of the host jobs. `$INTERNAL/afframe-deploy.md` describes the deploy host.
 - Export `AFFRAME_HOME` with the default in `deploy/bin/common.sh`. `deploy/host/systemd/afframe@.service` uses that path.
 - Run the `gh` commands on a workstation.
+- A restore needs the backup switch of section 4 on. With `off`, `pgbackrest check` and `afframe-backup` fail, so steps 2 and 7 stop.
+- On a running deploy host, set the switch and run a deploy before step 1 of the point-in-time restore. That deploy starts Postgres with archiving on.
+- On a rebuilt deploy host, set the switch before the host setup. The `docker compose` line of its step 3 does not set `AFFRAME_ARCHIVE_MODE`, so Postgres starts with archiving on, and the first deploy applies the switch.
+- When the switch was `off`, the backup and restore drill timers can be disabled. `systemctl start` runs them only until the next reboot, so run `systemctl enable` for them too.
 - `deploy/test/integration.sh` runs steps 2 to 5 and 7 of the point-in-time restore on its test stack, with a local backup repository. It also runs `stanza-create` on the restored database.
 
 ### Restore the running deploy host to a point in time

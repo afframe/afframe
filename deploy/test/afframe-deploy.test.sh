@@ -456,6 +456,7 @@ for kv in 'HOST=x.test`) || PathPrefix(`/' 'HOST=X.test' 'PORT=80a' 'PORT=' 'MEM
 done
 rm "$release/deploy/services/bad.conf"
 
+# shellcheck disable=SC2016 # the literal compose line, with its variable
 check "compose reads the archive mode from the deploy" grep -qxF '      - archive_mode=${AFFRAME_ARCHIVE_MODE:-on}' \
   "$root/deploy/compose.prod.yml"
 echo AFFRAME_BACKUPS=off > "$FAKE/infra.env"
