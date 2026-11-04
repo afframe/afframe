@@ -18,6 +18,7 @@ printf 'HEARTBEAT_HEALTH_URL=https://hb.test/ping/hb-key-secret\nALERT_URL=https
 # $FAKE/pgbackrest: the `pgbackrest info` JSON. $FAKE/archiver: the psql answer, or "fail".
 cat > "$FAKE/bin/docker" <<'FAKEDOCKER'
 #!/usr/bin/env bash
+echo "$*" >> "$FAKE/docker-calls"
 case "$*" in
   "inspect -f"*)
     state="$FAKE/state/${*: -1}"
@@ -171,6 +172,37 @@ echo fail > "$FAKE/archiver"
 check "archiver query failing: health fails" fails health
 check "and reports it as unknown" reported "WAL archiving failing (unknown)"
 check "the alert carries the problem" on_argv "WAL archiving failing"
+
+echo '[]' > "$FAKE/pgbackrest"
+echo t > "$FAKE/archiver"
+infra="$(cat "$AFFRAME_HOME/env/infra.env")"
+docker_called() { grep -qF -- "$1" "$FAKE/docker-calls"; }
+backups_flag() { printf '%s\n%s\n' "$infra" "$1" > "$AFFRAME_HOME/env/infra.env"; : > "$FAKE/docker-calls"; }
+
+backups_flag AFFRAME_BACKUPS=off
+check "backups off, no backup, archiving failing: health ok" health
+check "backups off: no pgbackrest call" fails docker_called pgbackrest
+check "backups off: no archiver query" fails docker_called pg_stat_archiver
+check "backups off: the Postgres container is still checked" docker_called "inspect -f"
+check "backups off: success ping" sent 'url = "https://hb.test/ping/hb-key-secret"'
+echo fail > "$FAKE/state/afframe-postgres"
+check "backups off: a stopped Postgres still fails health" fails health
+rm -f "$FAKE/state/afframe-postgres"
+
+backups_flag ""
+check "flag unset: no backup fails health" fails health
+check "flag unset: names the age" reported "h ago"
+check "flag unset: names the archiver" reported "WAL archiving failing (t)"
+check "flag unset: pgbackrest runs" docker_called "pgbackrest info"
+check "flag unset: the archiver query runs" docker_called pg_stat_archiver
+
+backups_flag AFFRAME_BACKUPS=on
+check "another value keeps the checks on" fails health
+check "and pgbackrest runs" docker_called "pgbackrest info"
+backups_flag AFFRAME_BACKUPS=
+check "an empty value keeps the checks on" fails health
+printf '%s\n' "$infra" > "$AFFRAME_HOME/env/infra.env"
+
 rm -f "$FAKE/pg"
 check "Postgres absent: the backup checks are skipped" health
 

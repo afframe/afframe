@@ -52,7 +52,8 @@ services:
     command:
       - postgres
       - -c
-      - archive_mode=on
+      # afframe-deploy sets it from AFFRAME_BACKUPS in infra.env. afframe-health reads that key too.
+      - archive_mode=${AFFRAME_ARCHIVE_MODE:-on}
       - -c
       - archive_command=pgbackrest archive-push %p
       - -c

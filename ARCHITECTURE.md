@@ -24,7 +24,7 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 - `deploy/bin/afframe-deploy` deploys and rolls back the services, as sections 6.1 and 6.2 state.
 - `deploy/bin/vault-env` renders the env files and the origin certificate from Vault. It writes no `*_PEM` key to an env file, and it refuses multi-line values.
 - `deploy/bin/afframe-backup` takes a full or a differential backup. Its `Usage:` line gives the default type.
-- `deploy/bin/afframe-health` checks disk, memory, the container states, the age of the last backup, WAL archiving and the Vault credential expiry. It holds the thresholds.
+- `deploy/bin/afframe-health` checks disk, memory, the container states, the age of the last backup, WAL archiving and the Vault credential expiry. It holds the thresholds. The backup switch in section 4 removes the backup age and WAL archiving checks.
 - `deploy/bin/afframe-restore-drill` runs the restore drill of section 4.
 - `deploy/host/systemd/afframe@.service` runs one host command. `afframe-backup.timer`, `afframe-health.timer` and `afframe-restore-drill.timer` in that folder set the schedules.
 - A host job pings its heartbeat URL. A failed host job also posts to the alert endpoint. `heartbeat` in `deploy/bin/common.sh` sends both.
@@ -36,10 +36,15 @@ deploy host:  Cloudflare proxy ──► Traefik ──► blue/green service co
 - Postgres has two roles. The superuser is the `POSTGRES_USER` of `deploy/postgres/Dockerfile`. The host jobs, the backups and the role setup use it.
 - Services and migrations connect as the app role (`APP_ROLE` in `deploy/bin/common.sh`).
 - `docs/adr/0005-app-database-role.md` gives the privileges of the app role, its setup on each deploy and their reasons.
-- pgBackRest archives WAL and takes scheduled backups to the backup repository that Vault configures.
+- While backups are on, pgBackRest archives WAL and takes scheduled backups to the backup repository that Vault configures.
 - Each backup writes a sentinel row to `ops.heartbeat`. A failed sentinel write only warns.
 - The restore drill restores the latest backup with WAL into a throwaway container and never touches the live database.
 - The drill fails when the restored sentinel is older than the recovery point target.
+- The key `AFFRAME_BACKUPS` of the infra secret in Vault is the backup switch. Only the value `off` turns backups off. No key or any other value keeps them on.
+- With `off`, `afframe-deploy` starts Postgres with `archive_mode=off`. `afframe-health` then makes no pgBackRest call and skips the backup age and WAL archiving checks.
+- The switch does not stop the backup and restore drill timers. Root stops them on the deploy host.
+- `stanza-create` in `afframe-deploy` does not read the switch. It still needs the backup repository on each infrastructure update.
+- The switch applies on the next deploy. `vault-env` renders it to `infra.env`, and the changed file recreates Postgres. `$INTERNAL/afframe-deploy.md` gives the host steps.
 - `docs/conventions.md` section Naming sets the rule for the volume names.
 
 ## 5. External Integrations / APIs
@@ -244,6 +249,7 @@ The restore runs before the first deploy, and the recovery ends before it. The `
 |---|---|
 | `AFFRAME_HOME` | `deploy/bin/common.sh`, `deploy/bin/afframe-receive` and `deploy/compose.prod.yml` |
 | `AFFRAME_HTTP_PORT`, `AFFRAME_HTTPS_PORT` | `deploy/compose.prod.yml`, and `infra_hash` in `deploy/bin/afframe-deploy` |
+| `AFFRAME_ARCHIVE_MODE` | `deploy/compose.prod.yml`. `prepare` in `deploy/bin/afframe-deploy` sets it from the backup switch. |
 | `AFFRAME_HEALTH_TRIES`, `AFFRAME_HEALTH_PASSES`, `AFFRAME_MIGRATE_TIMEOUT`, `AFFRAME_MIGRATE_KILL_AFTER`, `AFFRAME_SWITCH_TIMEOUT` | `deploy/bin/afframe-deploy` |
 | `AFFRAME_MAX_DISK_PERCENT`, `AFFRAME_MIN_MEMORY_PERCENT`, `AFFRAME_MIN_VAULT_DAYS` | `deploy/bin/afframe-health` |
 | `AFFRAME_VAULT_KV_PREFIX` | `deploy/bin/vault-env`, from the environment or `host.conf` |

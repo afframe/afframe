@@ -36,6 +36,7 @@ if [[ "$1 $2" == "exec -i" ]]; then cat > "$FAKE/sql"; [[ "$(cat "$FAKE/role")" 
 # $FAKE/ready=fail: Postgres never accepts connections.
 if [[ "$1" == exec && "$*" == *" pg_isready"* ]]; then [[ "$(cat "$FAKE/ready")" != fail ]]; exit; fi
 [[ "$1" != compose ]] || echo "traefik-hash ${AFFRAME_TRAEFIK_HASH:-}" >> "$FAKE/calls"
+[[ "$1" != compose ]] || echo "archive-mode ${AFFRAME_ARCHIVE_MODE:-}" >> "$FAKE/calls"
 # Output that must stay on the host: <kind>-secret.
 [[ "$1" != compose ]] || echo "compose-secret"
 # $FAKE/compose, $FAKE/stanza, $FAKE/load = fail: compose, stanza-create or load fails.
@@ -454,6 +455,16 @@ for kv in 'HOST=x.test`) || PathPrefix(`/' 'HOST=X.test' 'PORT=80a' 'PORT=' 'MEM
   check "no route for it" test ! -e "$AFFRAME_HOME/traefik/dynamic/bad.yml"
 done
 rm "$release/deploy/services/bad.conf"
+
+check "compose reads the archive mode from the deploy" grep -qxF '      - archive_mode=${AFFRAME_ARCHIVE_MODE:-on}' \
+  "$root/deploy/compose.prod.yml"
+echo AFFRAME_BACKUPS=off > "$FAKE/infra.env"
+check "backups off: the deploy succeeds" dep
+check "backups off: Postgres starts with archive_mode=off" called "archive-mode off"
+check "backups off: stanza-create still runs" called "stanza-create"
+echo A=1 > "$FAKE/infra.env"
+check "flag unset: the deploy succeeds" dep
+check "flag unset: Postgres starts with archive_mode=on" called "archive-mode on"
 
 infra_state="$(cat "$AFFRAME_HOME/state/.infra")"
 echo A=changed > "$FAKE/infra.env"

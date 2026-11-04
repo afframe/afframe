@@ -19,7 +19,8 @@
 - `afframe-restore-drill` restores the latest backup with WAL into a throwaway container. Its own systemd timer starts it.
 - The drill never touches the live database.
 - The drill fails when the restored `ops.heartbeat` sentinel is older than the recovery point target in `deploy/bin/common.sh`.
-- `ARCHITECTURE.md` section 4 describes the data stores. Section 6.3 gives the steps of a restore.
+- The key `AFFRAME_BACKUPS` in the infra secret turns off WAL archiving and the backup checks of `afframe-health`. An unset key keeps them on, so a lost key never hides a failing backup.
+- `ARCHITECTURE.md` section 4 describes the data stores and the switch. Section 6.3 gives the steps of a restore.
 
 ## Consequences
 
