@@ -7,7 +7,7 @@ FROM ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7a
 FROM docker/compose-bin:v5.6.1@sha256:2aeaeedd4f2d8e2dcb399b2b9723bfaeb6714140cb0657897f5865960f1624ae AS compose
 
 # The base gives repo-lint.sh bash 5, git and Linux coreutils.
-FROM buildpack-deps:resolute-scm@sha256:29b1b636c37d7fa0e97bb4ff90357a9fc7ca5d5cc903d9982f73ac104c0e9fa0
+FROM buildpack-deps:resolute-scm@sha256:fbbab99859fb496bcd3a9874267194903c28b1e99a76343192847f4b83f6cc66
 COPY --from=actionlint /usr/local/bin/actionlint /usr/local/bin/
 COPY --from=shellcheck /bin/shellcheck /usr/local/bin/
 COPY --from=gitleaks /usr/bin/gitleaks /usr/local/bin/
